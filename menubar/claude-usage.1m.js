@@ -11,7 +11,6 @@ const HISTORY_PATH = join(
   homedir(),
   "Library/Application Support/Claude/plan-usage-history.json"
 );
-const DASHBOARD_URL = "http://localhost:3456";
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const STALE_MS = 15 * 60 * 1000;
@@ -115,7 +114,6 @@ try {
 
 out.push("---");
 out.push(line("Claude'u Aç", "bash='/usr/bin/open' param1='-a' param2='Claude' terminal=false"));
-out.push(line("Web Dashboard'ı Aç", `href=${DASHBOARD_URL}`));
 out.push(line("Yenile", "refresh=true"));
 
 console.log(out.join("\n"));
