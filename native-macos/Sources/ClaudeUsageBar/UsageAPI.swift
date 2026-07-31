@@ -207,19 +207,26 @@ enum UsageAPI {
         // "compactMap { $0 }" = listedeki nil'leri atip kalanlari birak
         // (ornegin hesapta haftalik limit tanimli degilse o alan nil gelir).
         let windows: [UsageSnapshot.Window] = [
-            window(from: usage.fiveHour, label: "Current session"),
-            window(from: usage.sevenDay, label: "Weekly (7 days)"),
+            window(from: usage.fiveHour, id: "fiveHour", label: "Current session"),
+            window(from: usage.sevenDay, id: "sevenDay", label: "Weekly (7 days)"),
         ].compactMap { $0 }
 
         return UsageSnapshot(windows: windows, capturedAt: Date(), source: .api)
     }
 
-    private static func window(from raw: APIWindow?, label: String) -> UsageSnapshot.Window? {
+    private static func window(from raw: APIWindow?, id: String, label: String) -> UsageSnapshot.Window? {
         guard let raw else { return nil }
+        let resetAt = raw.resetsAt.flatMap(parseTimestamp)
+
+        // Kesin zamani sakliyoruz: API'ye ulasamadigimiz bir anda yerel
+        // dosyadan tahmin yurutmek yerine bunu kullanacagiz
+        // (bkz. SessionStore.cachedResetAt).
+        SessionStore.setCachedResetAt(id, resetAt)
+
         return UsageSnapshot.Window(
             label: label,
             percent: Int(raw.utilization.rounded()),
-            resetAt: raw.resetsAt.flatMap(parseTimestamp),
+            resetAt: resetAt,
             resetIsEstimate: false  // API kesin zamani veriyor, tahmin degil
         )
     }

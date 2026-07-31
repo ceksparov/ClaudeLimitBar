@@ -80,4 +80,27 @@ enum SessionStore {
         get { UserDefaults.standard.string(forKey: "orgId") }
         set { UserDefaults.standard.set(newValue, forKey: "orgId") }
     }
+
+    // API'den ogrendigimiz KESIN sifirlanma zamanlarini sakliyoruz.
+    //
+    // Neden: sifirlanma zamani mutlak bir an ("31 Temmuz 19:10"). Bir kez
+    // ogrendikten sonra internet gitse de, oturum dusse de o an degismez —
+    // gecene kadar dogru kalir. Onbelleklemezsek, API'ye ulasamadigimiz
+    // anda bu kesin bilgiyi atip yerel dosyadan tahmin yurutmeye
+    // basliyorduk; kullaniciya gercekle uyusmayan bir sayi gostermenin
+    // sebebi tam olarak buydu.
+    static func cachedResetAt(_ id: String) -> Date? {
+        let seconds = UserDefaults.standard.double(forKey: "resetAt.\(id)")
+        guard seconds > 0 else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    static func setCachedResetAt(_ id: String, _ date: Date?) {
+        let key = "resetAt.\(id)"
+        if let date {
+            UserDefaults.standard.set(date.timeIntervalSince1970, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
 }

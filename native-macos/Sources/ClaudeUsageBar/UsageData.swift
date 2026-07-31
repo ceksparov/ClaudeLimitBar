@@ -31,6 +31,7 @@ struct RawHistory: Codable {
 // için AYNI hesaplama fonksiyonlarını (estimateReset gibi) tekrar tekrar
 // yazmadan kullanabilmek — "hangi alana bakılacağı" bir parametre oluyor.
 struct LimitWindow {
+    let id: String          // onbellek anahtari; API tarafiyla ayni olmali
     let key: KeyPath<RawUsage, Int>
     let label: String       // menüde görünecek Türkçe isim
     let windowMs: Double     // pencerenin süresi (5 saat ya da 7 gün, milisaniye cinsinden)
@@ -39,8 +40,8 @@ struct LimitWindow {
 // "let" = değişmeyen sabit (JS'teki const gibi). Bu dosyanın en üst
 // seviyesinde tanımlanan sabitler, programın her yerinden erişilebilir.
 let limits: [LimitWindow] = [
-    LimitWindow(key: \.fh, label: "Current session", windowMs: 5 * 60 * 60 * 1000),
-    LimitWindow(key: \.sd, label: "Weekly (7 days)", windowMs: 7 * 24 * 60 * 60 * 1000),
+    LimitWindow(id: "fiveHour", key: \.fh, label: "Current session", windowMs: 5 * 60 * 60 * 1000),
+    LimitWindow(id: "sevenDay", key: \.sd, label: "Weekly (7 days)", windowMs: 7 * 24 * 60 * 60 * 1000),
 ]
 
 let staleMs: Double = 15 * 60 * 1000  // bu süreden eskiyse veriyi "bayat" sayıyoruz
@@ -172,16 +173,23 @@ func fileSnapshot(samples: [RawSample], now: Double) -> UsageSnapshot {
     // "limits.map { ... }" = listedeki her eleman için köşeli parantez
     // içindeki dönüşümü uygulayıp yeni bir liste üret (JS'teki .map ile aynı).
     let windows = limits.map { limit in
-        UsageSnapshot.Window(
+        // Daha önce API'den öğrendiğimiz KESIN zaman hâlâ gelecekteyse onu
+        // kullan — tahmin yürütmeye gerek yok, çünkü o an değişmedi.
+        // Haftalık pencerede bu özellikle değerli: sıfırlanma günler sonra
+        // olduğu için önbellekteki değer günlerce doğru kalıyor.
+        let cached = SessionStore.cachedResetAt(limit.id)
+        let cachedIsUsable = (cached?.timeIntervalSinceNow ?? -1) > 0
+
+        // estimateReset milisaniye döndürüyor; Date'e çeviriyoruz.
+        let estimated = estimateReset(
+            samples: samples, key: limit.key, windowMs: limit.windowMs, now: now
+        ).map { Date(timeIntervalSince1970: $0 / 1000) }
+
+        return UsageSnapshot.Window(
             label: limit.label,
             percent: last.u[keyPath: limit.key],
-            // estimateReset milisaniye döndürüyor; Date'e çeviriyoruz.
-            // "?.map" burada Optional üzerinde çalışır: değer varsa dönüştür,
-            // yoksa nil kalsın.
-            resetAt: estimateReset(
-                samples: samples, key: limit.key, windowMs: limit.windowMs, now: now
-            ).map { Date(timeIntervalSince1970: $0 / 1000) },
-            resetIsEstimate: true
+            resetAt: cachedIsUsable ? cached : estimated,
+            resetIsEstimate: !cachedIsUsable
         )
     }
 
