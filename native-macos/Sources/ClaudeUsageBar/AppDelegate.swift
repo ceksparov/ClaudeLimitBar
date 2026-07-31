@@ -238,6 +238,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // JSON okunamadığında/bozuk olduğunda ve giriş de yapılmamışken
     // gösterilen menü.
     private func renderError(_ error: Error) {
+        // Giriş yapılmamışsa ortada bir ARIZA yok — kullanıcı henüz
+        // bağlanmamış demektir. Bunu hata ekranı gibi göstermek, uygulamayı
+        // ilk kez açan birini boşuna telaşlandırıyor. Üstelik bu, Claude
+        // masaüstü uygulaması kurulu olmayan bir kullanıcının göreceği ilk
+        // ekran — yani "bozuk indirdim" izlenimi tam da ilk temasta oluşuyor.
+        guard SessionStore.sessionKey != nil else {
+            renderSignedOut()
+            return
+        }
+
         statusItem.button?.attributedTitle = attributed(" N/A", color: .disabledControlTextColor)
         guard !menuIsOpen else { return }
 
@@ -255,6 +265,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             "Canlı veri için \"Claude ile Giriş Yap\"ı kullanın ya da Claude masaüstü uygulamasını açın",
             color: grayText, small: true
         )
+        appendFooter(to: menu)
+        statusItem.menu = menu
+    }
+
+    // Henüz giriş yapılmamış (ya da oturumu düşmüş) ve gösterilecek yerel
+    // veri de yok. Bu bir hata durumu değil, sadece "başlamaya hazır"
+    // durumu — o yüzden ayrı ve sakin bir ekran gösteriyoruz.
+    private func renderSignedOut() {
+        statusItem.button?.attributedTitle = attributed(" –", color: .disabledControlTextColor)
+        guard !menuIsOpen else { return }
+
+        let menu = NSMenu()
+        menu.delegate = self
+
+        if needsReauth {
+            menu.addItem(withTitle: "Oturum süresi doldu", action: nil, keyEquivalent: "")
+            addRow(
+                to: menu, "Kullanımınızı görmek için yeniden giriş yapın",
+                color: grayText, small: true
+            )
+        } else {
+            menu.addItem(withTitle: "Henüz giriş yapılmadı", action: nil, keyEquivalent: "")
+            addRow(
+                to: menu, "Kullanım limitlerinizi görmek için Claude ile giriş yapın",
+                color: grayText, small: true
+            )
+        }
+
         appendFooter(to: menu)
         statusItem.menu = menu
     }
