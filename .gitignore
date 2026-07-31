@@ -4,3 +4,5 @@ node_modules/
 .claude/settings.local.json
 native-macos/.build/
 native-macos/.swiftpm/
+native-macos/ClaudeUsageBar.app/
+native-macos/*.zip

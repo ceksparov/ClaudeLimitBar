@@ -51,6 +51,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // göstermek için saklıyoruz.
     private var apiError: Error?
 
+    // Oturum süresi dolduğunda true olur ve kullanıcı yeniden giriş yapana
+    // kadar öyle kalır. Ayrı bir bayrak tutmamızın sebebi: süresi dolan
+    // anahtarı hemen siliyoruz, o yüzden apiError bir sonraki döngüde
+    // temizleniyor — bayrak olmasaydı "yeniden giriş yapın" uyarısı 20
+    // saniye sonra kaybolur, kullanıcı neden veri gelmediğini anlamazdı.
+    private var needsReauth = false
+
     // NSApplication açıldığında AppKit bu fonksiyonu otomatik çağırır
     // (JS'teki "DOMContentLoaded" event'ine benzer bir "artık hazırım" anı).
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -108,10 +115,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let snapshot = try await UsageAPI.fetchSnapshot()
             apiError = nil
             render(snapshot)
+        } catch APIError.unauthorized {
+            // Anahtar artık ölü (oturum süresi doldu ya da başka bir yerden
+            // iptal edildi). Onu Keychain'de tutmanın hiçbir faydası yok:
+            // her 20 saniyede bir çalışmayacağı bilinen bir istek atardık ve
+            // menüde "Giriş Yap" yerine "Oturumu Kapat" yazmaya devam
+            // ederdi — kullanıcı önce çıkış yapmayı akıl etmek zorunda
+            // kalırdı. Silince menü kendiliğinden girişe dönüyor.
+            log("oturum suresi doldu — anahtar silindi, yeniden giris gerekiyor")
+            SessionStore.clear()
+            SessionStore.orgId = nil
+            needsReauth = true
+            apiError = nil
+            renderFromFile()
+
         } catch {
-            // API'ye ulaşamadık (internet yok, oturum düştü, sunucu değişti…).
+            // Geçici bir sorun (internet yok, zaman aşımı, sunucu hatası).
             // Uygulamayı kırmak yerine sessizce yerel dosyaya düşüyoruz —
             // kullanıcı yine bir şeyler görsün, sebebi de menüde yazsın.
+            // Anahtara DOKUNMUYORUZ: geçici bir kesinti yüzünden kullanıcıyı
+            // yeniden giriş yapmaya zorlamak yanlış olurdu.
             apiError = error
             renderFromFile()
         }
@@ -175,6 +198,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if stale {
             addRow(
                 to: menu, "⚠️ Veri bayat — Claude uygulaması kapalı olabilir",
+                color: warningColor, small: true
+            )
+        }
+        if needsReauth {
+            addRow(
+                to: menu, "⚠️ Oturum süresi doldu — yeniden giriş yapın",
                 color: warningColor, small: true
             )
         }
@@ -291,6 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Farklı bir hesapla girilmiş olabilir; önbellekteki org
             // kimliği artık geçersiz sayılmalı.
             SessionStore.orgId = nil
+            self?.needsReauth = false
             self?.refresh()
         }
     }
@@ -299,6 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SessionStore.clear()
         SessionStore.orgId = nil
         apiError = nil
+        needsReauth = false  // kullanıcı kendi isteğiyle çıktı, uyarıya gerek yok
 
         // Keychain'i silmek yetmiyor: WebKit'in kalici deposundaki claude.ai
         // oturum cerezi de gitmeli, yoksa "cikis yaptim" demek gercekte

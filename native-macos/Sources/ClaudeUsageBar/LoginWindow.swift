@@ -137,15 +137,59 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
         return webView
     }
 
+    // Pencerenin ustunde duran uyari bandi. Bunu koymamizin sebebi somut:
+    // passkey, gomulu bir WKWebView icinde CALISAMAZ (Apple, WKWebView'da
+    // WebAuthn icin uygulamanin ilgili alan adiyla "Associated Domains"
+    // iliskisi kurmus olmasini sart kosuyor — google.com bizim alan adimiz
+    // olmadigi icin bu mumkun degil). Kullaniciya bunu onceden soylemezsek,
+    // passkey ekranina kadar gidip orada "bir hata olustu" ile karsilasiyor
+    // ve neden basarisiz oldugunu anlamiyor.
+    private static let hintText =
+        "Passkey bu pencerede çalışmaz. Google'da passkey ekranı çıkarsa "
+        + "\"Try another way\" deyip şifrenizi kullanın — ya da daha kolayı, "
+        + "e-posta ile giriş yapın."
+
+    private func makeHintLabel() -> NSTextField {
+        // wrappingLabelWithString = secilemeyen, satir kaydiran bir etiket
+        // uretir (duzenlenebilir bir metin kutusu degil).
+        let label = NSTextField(wrappingLabelWithString: Self.hintText)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }
+
     private func makeWindow(for webView: WKWebView, title: String) -> NSWindow {
+        // Pencerenin icerigi artik sadece WebView degil: ustte uyari bandi,
+        // altta WebView olacak sekilde bir kapsayici kuruyoruz.
+        let hint = makeHintLabel()
+        webView.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 760))
+        container.addSubview(hint)
+        container.addSubview(webView)
+
+        // Auto Layout: pencere yeniden boyutlandirildiginda bandin ustte
+        // sabit kalmasini, WebView'in ise kalan alani doldurmasini saglar.
+        NSLayoutConstraint.activate([
+            hint.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
+            hint.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            hint.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+
+            webView.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 10),
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
         let window = NSWindow(
-            contentRect: webView.frame,
+            contentRect: container.frame,
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = title
-        window.contentView = webView
+        window.contentView = container
         window.center()
         // Uygulamamiz .accessory modunda (Dock'ta yok) oldugu icin pencere
         // kapatildiginda bellekten silinmesin istiyoruz.
