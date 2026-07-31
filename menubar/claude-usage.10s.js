@@ -1,4 +1,4 @@
-#!/usr/local/bin/node
+#!/usr/bin/env node
 // <xbar.title>Claude Kullanım</xbar.title>
 // <xbar.desc>Claude kullanım limitlerini masaüstü uygulamasının yerel önbelleğinden okur.</xbar.desc>
 // <xbar.author>claude-usage</xbar.author>
