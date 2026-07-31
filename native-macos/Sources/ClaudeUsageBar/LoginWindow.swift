@@ -1,11 +1,33 @@
 import AppKit
+import OSLog
 import WebKit
 
 // Giris akisi birden fazla pencere ve yonlendirmeden gectigi icin, bir sey
 // ters gittiginde nerede takildigini gormek zor. Bu yuzden akisin her
-// adimini terminale yaziyoruz — kullanicidan "su ekrani gordum" demesini
-// beklemek yerine, adim adim ne olduguna bakabiliyoruz.
+// adimini kaydediyoruz.
+//
+// Neden os_log: paketlenmis bir uygulamada print() ciktisi HICBIR YERE
+// gitmez — stdout'u okuyan kimse yoktur. Yani bir kullanici "giris
+// yapamiyorum" dediginde elimizde hicbir veri olmazdi. os_log ise sistemin
+// log deposuna yazar; kullanici Console.app'ten ya da su komutla gorebilir:
+//
+//   log show --predicate 'subsystem == "io.github.claudeusagebar"' --last 1h
+//
+// privacy: .public — log satirlarinda gizli deger YOK (URL'lerin yalnizca
+// host+path kismi yaziliyor, oturum anahtari hicbir zaman loglanmiyor).
+// Bunu belirtmezsek sistem metni <private> diye maskeler ve log ise yaramaz.
+private let appLog = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "ClaudeUsageBar", category: "app"
+)
+
 func log(_ message: String) {
+    // .notice seviyesi bilerek secildi: .info ve .debug yalnizca bellekte
+    // tutulur, diske yazilmaz — yani olay gectikten SONRA "log show" ile
+    // bakildiginda hicbir sey bulunamaz (olculdu). Kullanicinin bize sonradan
+    // log gonderebilmesi icin kaydin kalici olmasi sart.
+    appLog.notice("\(message, privacy: .public)")
+
+    // Terminalden calistirildiginda (gelistirme sirasinda) dogrudan da gorunsun.
     let clock = DateFormatter()
     clock.dateFormat = "HH:mm:ss"
     print("[\(clock.string(from: Date()))] \(message)")

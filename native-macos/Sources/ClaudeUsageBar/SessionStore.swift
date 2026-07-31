@@ -81,6 +81,18 @@ enum SessionStore {
         set { UserDefaults.standard.set(newValue, forKey: "orgId") }
     }
 
+    // Kullanicinin menuden ACIKCA sectigi organizasyon.
+    //
+    // orgId'den ayri tutuyoruz cunku orgId, hata kurtarmasi sirasinda
+    // otomatik olarak temizlenebiliyor (bayat olabilecegi varsayimiyla).
+    // Kullanicinin secimi ise bir tercih — gecici bir sunucu hatasi yuzunden
+    // sessizce kaybolmamali. Erisim gercekten kaybedilmisse zaten listede
+    // bulunamaz ve otomatik secime dusulur.
+    static var preferredOrgId: String? {
+        get { UserDefaults.standard.string(forKey: "preferredOrgId") }
+        set { UserDefaults.standard.set(newValue, forKey: "preferredOrgId") }
+    }
+
     // API'den ogrendigimiz KESIN sifirlanma zamanlarini sakliyoruz.
     //
     // Neden: sifirlanma zamani mutlak bir an ("31 Temmuz 19:10"). Bir kez

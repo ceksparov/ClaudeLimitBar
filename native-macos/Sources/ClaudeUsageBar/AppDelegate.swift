@@ -67,10 +67,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // hesaplarında birden fazla olabiliyor ve o zaman kullanıcının hangisine
     // baktığını seçebilmesi gerekiyor (bkz. appendOrganizationMenu).
     private var organizations: [UsageAPI.Organization] = []
-    // Organizasyon listesini bir kez denedik mi? Sadece "liste bos mu" diye
-    // bakarsak, istek her başarısız olduğunda 20 saniyede bir tekrar
-    // denenirdi — hesapta gerçekten organizasyon yoksa bu sonsuz sürerdi.
-    private var triedLoadingOrganizations = false
+    // Organizasyon listesini en son ne zaman çektik? Hiç yenilemezsek yeni
+    // bir takıma katılan kullanıcı onu menüde göremez; her turda denersek de
+    // hesapta tek organizasyon varken 20 saniyede bir boşuna istek atarız.
+    // Yarım saatte bir tazelemek ikisinin arasında makul bir denge.
+    private var organizationsLoadedAt: Date?
 
     // Sunucu "çok sık istek atıyorsun" (429) derse bu tarihe kadar hiç
     // istek atmıyoruz. Aynı hızda devam etmek engeli uzatabilir; geri
@@ -114,6 +115,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             systemSymbolName: "bolt.fill", accessibilityDescription: "Claude Usage"
         )
         statusItem.button?.imagePosition = .imageLeading  // ikon solda, yüzde metni sağda
+
+        // Açılışta tek satırlık durum kaydı. Kullanıcı bir sorun bildirdiğinde
+        // ilk sorulacak şeyler bunlar: hangi sürüm, paketlenmiş mi çalışıyor,
+        // giriş yapılmış mı. (Oturum anahtarının kendisi asla loglanmaz.)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        log(
+            "started — v\(version ?? "dev"), "
+                + "\(isBundledApp ? "bundled" : "bare binary"), "
+                + "signed in: \(SessionStore.sessionKey != nil)"
+        )
 
         refresh()  // uygulama açılır açılmaz bir kere hemen göster
 
@@ -214,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             SessionStore.clear()
             SessionStore.orgId = nil
             organizations = []
-            triedLoadingOrganizations = false
+            organizationsLoadedAt = nil
             needsReauth = true
             apiError = nil
             renderFromFile()
@@ -234,9 +245,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // tekrar sormanın anlamı yok, bu liste neredeyse hiç değişmiyor.
     @MainActor
     private func loadOrganizationsIfNeeded() async {
-        guard !triedLoadingOrganizations else { return }
-        triedLoadingOrganizations = true
-        organizations = (try? await UsageAPI.organizations()) ?? []
+        if let loadedAt = organizationsLoadedAt, Date().timeIntervalSince(loadedAt) < 1800 {
+            return
+        }
+        organizationsLoadedAt = Date()
+
+        // Başarısız olursa elimizdeki listeyi KORUYORUZ. "?? []" deseydik
+        // geçici bir hata, menüdeki organizasyon seçimini kullanıcının
+        // gözü önünde yok ederdi.
+        if let fetched = try? await UsageAPI.organizations() {
+            organizations = fetched
+        }
     }
 
     // Menüyü, elimizdeki son veriyle yeniden kurar — sunucuya gitmeden.
@@ -504,7 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // kimliği ve listesi artık geçersiz sayılmalı.
             SessionStore.orgId = nil
             self?.organizations = []
-            self?.triedLoadingOrganizations = false
+            self?.organizationsLoadedAt = nil
             self?.needsReauth = false
             self?.pauseUntil = nil
             self?.refresh(force: true)
@@ -514,8 +533,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func signOut() {
         SessionStore.clear()
         SessionStore.orgId = nil
+        SessionStore.preferredOrgId = nil
         organizations = []
-        triedLoadingOrganizations = false
+        organizationsLoadedAt = nil
         pauseUntil = nil
         apiError = nil
         needsReauth = false  // kullanıcı kendi isteğiyle çıktı, uyarıya gerek yok
@@ -532,6 +552,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func selectOrganization(_ sender: NSMenuItem) {
         guard let uuid = sender.representedObject as? String else { return }
         SessionStore.orgId = uuid
+        // Tercihi ayrıca kaydediyoruz: orgId hata kurtarmasında
+        // temizlenebiliyor, ama kullanıcının seçimi kalıcı olmalı.
+        SessionStore.preferredOrgId = uuid
         lastSnapshot = nil  // artık başka bir organizasyona bakıyoruz
         // Önbellekteki sıfırlanma zamanları ÖNCEKİ organizasyona ait.
         SessionStore.clearResetCache()

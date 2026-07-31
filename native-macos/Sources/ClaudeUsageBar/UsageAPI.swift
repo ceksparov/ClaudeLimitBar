@@ -144,9 +144,17 @@ enum UsageAPI {
         if let cached = SessionStore.orgId { return cached }
 
         let orgs: [APIOrganization] = try await get("/api/organizations", sessionKey: sessionKey)
-        // Bir hesapta birden fazla organizasyon olabilir; sohbet yetenegi
-        // olani tercih ediyoruz, yoksa ilkine duselim.
-        let chosen = orgs.first { $0.capabilities?.contains("chat") == true } ?? orgs.first
+
+        // Sirasiyla: kullanicinin actikca sectigi (hala erisimi varsa),
+        // sonra sohbet yetenegi olan ilki, sonra listedeki ilki.
+        //
+        // Kullanicinin secimini ilk sirada denemek onemli: orgId hata
+        // kurtarmasi sirasinda temizlenebiliyor ve o zaman buraya geri
+        // geliyoruz — tercihi burada hatirlamazsak kullanicinin secimi her
+        // gecici hatada sessizce kaybolurdu.
+        let chosen = orgs.first { $0.uuid == SessionStore.preferredOrgId }
+            ?? orgs.first { $0.capabilities?.contains("chat") == true }
+            ?? orgs.first
         guard let uuid = chosen?.uuid else { throw APIError.noOrganization }
 
         SessionStore.orgId = uuid
