@@ -18,6 +18,9 @@ enum APIError: LocalizedError {
     case unauthorized
     case badStatus(Int)
     case noOrganization
+    // Sunucu "cok sik istek attin" dedi. retryAfter, sunucunun onerdigi
+    // bekleme suresi (Retry-After basligi); vermemisse nil.
+    case rateLimited(retryAfter: TimeInterval?)
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +28,7 @@ enum APIError: LocalizedError {
         case .unauthorized: return "Session expired — sign in again"
         case .badStatus(let code): return "Server returned \(code)"
         case .noOrganization: return "No organization found for this account"
+        case .rateLimited: return "Rate limited — backing off"
         }
     }
 }
@@ -95,8 +99,16 @@ enum UsageAPI {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw APIError.badStatus(0) }
 
-        // 401/403 = "seni tanimiyorum" — oturum dusmus demektir, bu ozel
-        // durumu ayirmamiz lazim ki kullaniciya tekrar giris teklif edelim.
+        // 429 = "cok sik istek atiyorsun". Bunu ayirt etmemiz sart: ayni
+        // hizda istek atmaya devam edersek engel uzayabilir. Cagiran taraf
+        // bunu gorup bir sure hic istek atmamali (bkz. AppDelegate.pauseUntil).
+        if http.statusCode == 429 {
+            let retryAfter = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(TimeInterval.init)
+            throw APIError.rateLimited(retryAfter: retryAfter)
+        }
+
+        // claude.ai, gecersiz/eksik oturum icin 401 DEGIL 403 donuyor
+        // (olculdu). Ikisini de "oturum dusmus" sayiyoruz.
         if http.statusCode == 401 || http.statusCode == 403 { throw APIError.unauthorized }
         guard (200..<300).contains(http.statusCode) else { throw APIError.badStatus(http.statusCode) }
 
@@ -170,6 +182,23 @@ enum UsageAPI {
     static func fetchSnapshot() async throws -> UsageSnapshot {
         guard let key = SessionStore.sessionKey else { throw APIError.notSignedIn }
 
+        do {
+            return try await snapshot(sessionKey: key)
+        } catch APIError.unauthorized {
+            // 403 iki ayri seyi birden anlatiyor olabilir: "oturumun
+            // gecersiz" ya da "bu organizasyona erisimin yok" — claude.ai
+            // ikisini de 403 donuyor, ayirt edemiyoruz. Onbellekteki org
+            // kimligi bayatlamis olabilecegi icin (kullanici bir takimdan
+            // cikarilmis olabilir) once SADECE onu atip bir kez daha
+            // deniyoruz. Boylece cozumu oturumu kapatmak olmayan bir sorun
+            // yuzunden kullaniciyi bosuna yeniden giris yapmaya zorlamiyoruz.
+            guard SessionStore.orgId != nil else { throw APIError.unauthorized }
+            SessionStore.orgId = nil
+            return try await snapshot(sessionKey: key)
+        }
+    }
+
+    private static func snapshot(sessionKey key: String) async throws -> UsageSnapshot {
         let org = try await organizationId(sessionKey: key)
         let usage: APIUsage = try await get("/api/organizations/\(org)/usage", sessionKey: key)
 

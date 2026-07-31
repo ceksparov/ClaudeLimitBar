@@ -67,6 +67,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // hesaplarında birden fazla olabiliyor ve o zaman kullanıcının hangisine
     // baktığını seçebilmesi gerekiyor (bkz. appendOrganizationMenu).
     private var organizations: [UsageAPI.Organization] = []
+    // Organizasyon listesini bir kez denedik mi? Sadece "liste bos mu" diye
+    // bakarsak, istek her başarısız olduğunda 20 saniyede bir tekrar
+    // denenirdi — hesapta gerçekten organizasyon yoksa bu sonsuz sürerdi.
+    private var triedLoadingOrganizations = false
+
+    // Sunucu "çok sık istek atıyorsun" (429) derse bu tarihe kadar hiç
+    // istek atmıyoruz. Aynı hızda devam etmek engeli uzatabilir; geri
+    // çekilmek hem bize hem sunucuya doğru olan davranış.
+    private var pauseUntil: Date?
+
+    // Aynı anda birden fazla istek uçuşmasın. Bir istek 15 saniyeye kadar
+    // sürebiliyor; zamanlayıcı 20 saniyede bir, menü her kapandığında da
+    // bir kez tetikliyor. Bu koruma olmazsa üst üste binen istekler hem
+    // gereksiz trafik yaratır hem de sonuçlar ters sırada gelip ekranda
+    // eski veriyi gösterebilir.
+    private var isFetching = false
+    private var lastFetchAt: Date?
+
+    // En son çizdiğimiz veri. Menüyü ağdan bir şey çekmeden yeniden
+    // kurabilmek için saklıyoruz (ör. "Start at Login" tikini güncellemek
+    // gerektiğinde sunucuya gitmenin anlamı yok).
+    private var lastSnapshot: UsageSnapshot?
 
     // NSApplication açıldığında AppKit bu fonksiyonu otomatik çağırır
     // (JS'teki "DOMContentLoaded" event'ine benzer bir "artık hazırım" anı).
@@ -102,12 +124,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Giriş yapılmışsa canlı API'yi, yapılmamışsa doğrudan yerel dosyayı
     // kullanıyoruz. Bu, uygulamanın iki kaynağı yönettiği merkez nokta.
-    private func refresh() {
+    // force: kullanıcının kendi tıklamasıyla tetiklenen yenilemeler için.
+    // Aşağıdaki hız sınırlamaları arka plandaki zamanlayıcı içindir; kullanıcı
+    // giriş yaptığında ya da organizasyon değiştirdiğinde sonucu HEMEN
+    // görmeli, "5 saniye geçmedi" diye beklememeli.
+    private func refresh(force: Bool = false) {
         if SessionStore.sessionKey == nil {
             apiError = nil
             organizations = []  // çıkış yapıldıysa eski listeyi taşıma
             renderFromFile()
             return
+        }
+
+        // Zaten uçuşan bir istek varsa ikincisini başlatma. Bu koruma
+        // kullanıcı tetiklese bile geçerli — iki eşzamanlı istek sonuçları
+        // ters sırada döndürüp ekranda eski veriyi bırakabilir.
+        guard !isFetching else { return }
+
+        if !force {
+            // Oran sınırına takıldıysak süre dolana kadar hiç istek atmıyoruz.
+            if let pauseUntil, pauseUntil > Date() {
+                renderFromFile()
+                return
+            }
+
+            // Menü her kapandığında da yeniliyoruz; kullanıcı menüyü arka
+            // arkaya açıp kapatırsa bu saniyede birkaç isteğe dönüşebilir.
+            // Ardışık iki istek arasına en az 5 saniye koyuyoruz.
+            if let lastFetchAt, Date().timeIntervalSince(lastFetchAt) < 5 { return }
         }
 
         // "Task { ... }" = "şu işi arka planda başlat, bitince devam et".
@@ -121,11 +165,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // olmak ZORUNDA; bu işaret olmadan çökme/bozulma riski var.
     @MainActor
     private func refreshFromAPI() async {
+        isFetching = true
+        lastFetchAt = Date()
+        defer { isFetching = false }  // defer = fonksiyondan nasıl çıkarsak çıkalım çalışır
+
         do {
             let snapshot = try await UsageAPI.fetchSnapshot()
             apiError = nil
+            pauseUntil = nil
             render(snapshot)
             await loadOrganizationsIfNeeded()
+
+        } catch APIError.rateLimited(let retryAfter) {
+            // Sunucunun önerdiği süreyi kullan; vermemişse 5 dakika bekle.
+            let wait = retryAfter ?? 300
+            pauseUntil = Date().addingTimeInterval(wait)
+            log("rate limited — pausing for \(Int(wait))s")
+            apiError = APIError.rateLimited(retryAfter: retryAfter)
+            renderFromFile()
 
         } catch APIError.unauthorized {
             // Anahtar artık ölü (oturum süresi doldu ya da başka bir yerden
@@ -138,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             SessionStore.clear()
             SessionStore.orgId = nil
             organizations = []
+            triedLoadingOrganizations = false
             needsReauth = true
             apiError = nil
             renderFromFile()
@@ -157,8 +215,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // tekrar sormanın anlamı yok, bu liste neredeyse hiç değişmiyor.
     @MainActor
     private func loadOrganizationsIfNeeded() async {
-        guard organizations.isEmpty else { return }
+        guard !triedLoadingOrganizations else { return }
+        triedLoadingOrganizations = true
         organizations = (try? await UsageAPI.organizations()) ?? []
+    }
+
+    // Menüyü, elimizdeki son veriyle yeniden kurar — sunucuya gitmeden.
+    private func redraw() {
+        if let lastSnapshot {
+            render(lastSnapshot)
+        } else {
+            renderFromFile()
+        }
     }
 
     private func renderFromFile() {
@@ -175,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Asıl "menü çubuğunda ne yazsın, dropdown'da neler olsun" mantığı burada.
     private func render(_ snapshot: UsageSnapshot) {
+        lastSnapshot = snapshot
         let now = Date()
         let age = now.timeIntervalSince(snapshot.capturedAt) * 1000
         // Canlı API verisi tanımı gereği taze; bayatlık sadece yerel dosya
@@ -409,8 +478,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // kimliği ve listesi artık geçersiz sayılmalı.
             SessionStore.orgId = nil
             self?.organizations = []
+            self?.triedLoadingOrganizations = false
             self?.needsReauth = false
-            self?.refresh()
+            self?.pauseUntil = nil
+            self?.refresh(force: true)
         }
     }
 
@@ -418,6 +489,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SessionStore.clear()
         SessionStore.orgId = nil
         organizations = []
+        triedLoadingOrganizations = false
+        pauseUntil = nil
         apiError = nil
         needsReauth = false  // kullanıcı kendi isteğiyle çıktı, uyarıya gerek yok
 
@@ -425,15 +498,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // oturum çerezi de gitmeli, yoksa "çıkış yaptım" demek gerçekte
         // doğru olmaz (bkz. LoginWindowController.clearStoredWebSession).
         LoginWindowController.clearStoredWebSession { [weak self] in
-            self?.refresh()
+            self?.refresh(force: true)
         }
-        refresh()  // temizlik bitmeden de arayüz hemen güncellensin
+        refresh(force: true)  // temizlik bitmeden de arayüz hemen güncellensin
     }
 
     @objc private func selectOrganization(_ sender: NSMenuItem) {
         guard let uuid = sender.representedObject as? String else { return }
         SessionStore.orgId = uuid
-        refresh()
+        lastSnapshot = nil  // artık başka bir organizasyona bakıyoruz
+        refresh(force: true)
     }
 
     @objc private func toggleStartAtLogin() {
@@ -450,7 +524,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // kullanıcı her zaman Sistem Ayarları'ndan elle ekleyebilir.
             log("start at login failed: \(error.localizedDescription)")
         }
-        refresh()  // menüdeki tik işaretini güncelle
+        redraw()  // sadece menüdeki tik işaretini güncelle — ağa gitmeye gerek yok
     }
 
     @objc private func openClaude() {
