@@ -159,17 +159,25 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
         return webView
     }
 
-    // Pencerenin ustunde duran uyari bandi. Bunu koymamizin sebebi somut:
-    // passkey, gomulu bir WKWebView icinde CALISAMAZ (Apple, WKWebView'da
-    // WebAuthn icin uygulamanin ilgili alan adiyla "Associated Domains"
-    // iliskisi kurmus olmasini sart kosuyor — google.com bizim alan adimiz
-    // olmadigi icin bu mumkun degil). Kullaniciya bunu onceden soylemezsek,
-    // passkey ekranina kadar gidip orada "bir hata olustu" ile karsilasiyor
-    // ve neden basarisiz oldugunu anlamiyor.
+    // Pencerenin ustunde duran yonlendirme bandi.
+    //
+    // Sirasi bilerek boyle: once CALISTIGINI BILDIGIMIZ yol, sonra uyari.
+    // Onceki surumde Google varsayilan yol gibi duruyor, e-posta ise bir
+    // kacis secenegi gibi sunuluyordu — oysa gercek deneyim tam tersini
+    // gosterdi: Google yolu passkey duvarina carpiyor, sonra sifre adimina
+    // dusuluyor, ust uste denemede de giris oran sinirina takiliyor.
+    //
+    // Passkey uyarisi neden sart: passkey gomulu bir WKWebView icinde
+    // CALISAMAZ (Apple, WKWebView'da WebAuthn icin uygulamanin ilgili alan
+    // adiyla "Associated Domains" iliskisi kurmus olmasini sart kosuyor —
+    // google.com bizim alan adimiz olmadigi icin bu mumkun degil). Onceden
+    // soylemezsek kullanici passkey ekranina kadar gidip orada anlamsiz bir
+    // hatayla karsilasiyor.
     private static let hintText =
-        "Passkeys don't work in this window. If Google shows a passkey prompt, "
-        + "choose \"Try another way\" and use your password — or simply sign in "
-        + "with your email instead."
+        "Easiest way: sign in with your email — Claude sends you a code. "
+        + "If you'd rather use Google, note that passkeys don't work in this "
+        + "window: when the passkey prompt appears, choose \"Try another way\" "
+        + "and use your password."
 
     private func makeHintLabel() -> NSTextField {
         // wrappingLabelWithString = secilemeyen, satir kaydiran bir etiket
