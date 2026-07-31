@@ -21,10 +21,10 @@ enum APIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notSignedIn: return "Giris yapilmamis"
-        case .unauthorized: return "Oturum suresi dolmus — yeniden giris gerekiyor"
-        case .badStatus(let code): return "Sunucu \(code) dondu"
-        case .noOrganization: return "Hesaba bagli organizasyon bulunamadi"
+        case .notSignedIn: return "Not signed in"
+        case .unauthorized: return "Session expired — sign in again"
+        case .badStatus(let code): return "Server returned \(code)"
+        case .noOrganization: return "No organization found for this account"
         }
     }
 }
@@ -63,7 +63,15 @@ enum UsageAPI {
 
     private struct APIOrganization: Decodable {
         let uuid: String
+        let name: String?
         let capabilities: [String]?
+    }
+
+    // Menude organizasyon secimi gosterebilmek icin disariya actigimiz
+    // sadelestirilmis tur (bkz. AppDelegate.appendOrganizationMenu).
+    struct Organization {
+        let uuid: String
+        let name: String
     }
 
     // MARK: - Genel istek yardimcisi
@@ -147,7 +155,17 @@ enum UsageAPI {
         }
     }
 
-    // MARK: - Disariya acilan tek fonksiyon
+    // Hesaba bagli tum organizasyonlar. Cogu kullanicida tek tane olur;
+    // Team/Enterprise hesaplarinda birden fazla olabilir ve o zaman
+    // kullanicinin hangisine baktigini secebilmesi gerekir.
+    static func organizations() async throws -> [Organization] {
+        guard let key = SessionStore.sessionKey else { throw APIError.notSignedIn }
+        let raw: [APIOrganization] = try await get("/api/organizations", sessionKey: key)
+        // Isim bos gelirse kimligi gosteriyoruz; menude bos satir olmasin.
+        return raw.map { Organization(uuid: $0.uuid, name: $0.name ?? $0.uuid) }
+    }
+
+    // MARK: - Disariya acilan fonksiyonlar
 
     static func fetchSnapshot() async throws -> UsageSnapshot {
         guard let key = SessionStore.sessionKey else { throw APIError.notSignedIn }
@@ -160,8 +178,8 @@ enum UsageAPI {
         // "compactMap { $0 }" = listedeki nil'leri atip kalanlari birak
         // (ornegin hesapta haftalik limit tanimli degilse o alan nil gelir).
         let windows: [UsageSnapshot.Window] = [
-            window(from: usage.fiveHour, label: "5 Saatlik Oturum"),
-            window(from: usage.sevenDay, label: "Haftalik (7 gun)"),
+            window(from: usage.fiveHour, label: "Current session"),
+            window(from: usage.sevenDay, label: "Weekly (7 days)"),
         ].compactMap { $0 }
 
         return UsageSnapshot(windows: windows, capturedAt: Date(), source: .api)

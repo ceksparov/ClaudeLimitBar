@@ -1,8 +1,13 @@
 import AppKit
+import ServiceManagement
 
 // Bu dosya, "ekrana ne çizeceğiz" işini yapıyor: menü çubuğu simgesi,
 // açılan menü, renkler, tıklama davranışları. Hesaplama mantığı yok,
 // o UsageData.swift ve UsageAPI.swift'te.
+//
+// NOT: Kod yorumları Türkçe (öğrenme amaçlı), ama kullanıcıya GÖRÜNEN
+// her metin İngilizce — uygulama GitHub'da yayınlanacağı için arayüz
+// dilinin İngilizce olması gerekiyor.
 
 // Yüzdeye göre renk seçiyor. NSColor'ı "red/green/blue" 0-1 arası ondalık
 // sayılarla kuruyoruz (JS'teki #ff3b30 hex kodunun aynısı, sadece
@@ -58,17 +63,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // saniye sonra kaybolur, kullanıcı neden veri gelmediğini anlamazdı.
     private var needsReauth = false
 
+    // Hesaba bağlı organizasyonlar. Çoğu kişide tek tane olur; Team/Enterprise
+    // hesaplarında birden fazla olabiliyor ve o zaman kullanıcının hangisine
+    // baktığını seçebilmesi gerekiyor (bkz. appendOrganizationMenu).
+    private var organizations: [UsageAPI.Organization] = []
+
     // NSApplication açıldığında AppKit bu fonksiyonu otomatik çağırır
     // (JS'teki "DOMContentLoaded" event'ine benzer bir "artık hazırım" anı).
     func applicationDidFinishLaunching(_ notification: Notification) {
         // .accessory = "Dock'ta simge gösterme, sadece menü çubuğunda yaşa".
-        // SwiftBar'ın kendisinin yaptığı şeyin aynısı.
         NSApp.setActivationPolicy(.accessory)
 
         // SF Symbols, Apple'ın hazır ikon setinin adı; "bolt.fill" bizim
-        // şimşek ikonumuz (SwiftBar'daki sfimage=bolt.fill ile aynı ikon).
+        // şimşek ikonumuz.
         statusItem.button?.image = NSImage(
-            systemSymbolName: "bolt.fill", accessibilityDescription: "Claude Kullanım"
+            systemSymbolName: "bolt.fill", accessibilityDescription: "Claude Usage"
         )
         statusItem.button?.imagePosition = .imageLeading  // ikon solda, yüzde metni sağda
 
@@ -96,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func refresh() {
         if SessionStore.sessionKey == nil {
             apiError = nil
+            organizations = []  // çıkış yapıldıysa eski listeyi taşıma
             renderFromFile()
             return
         }
@@ -115,16 +125,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let snapshot = try await UsageAPI.fetchSnapshot()
             apiError = nil
             render(snapshot)
+            await loadOrganizationsIfNeeded()
+
         } catch APIError.unauthorized {
             // Anahtar artık ölü (oturum süresi doldu ya da başka bir yerden
             // iptal edildi). Onu Keychain'de tutmanın hiçbir faydası yok:
             // her 20 saniyede bir çalışmayacağı bilinen bir istek atardık ve
-            // menüde "Giriş Yap" yerine "Oturumu Kapat" yazmaya devam
-            // ederdi — kullanıcı önce çıkış yapmayı akıl etmek zorunda
-            // kalırdı. Silince menü kendiliğinden girişe dönüyor.
-            log("oturum suresi doldu — anahtar silindi, yeniden giris gerekiyor")
+            // menüde "Sign In" yerine "Sign Out" yazmaya devam ederdi —
+            // kullanıcı önce çıkış yapmayı akıl etmek zorunda kalırdı.
+            // Silince menü kendiliğinden girişe dönüyor.
+            log("session expired — key cleared, sign-in required")
             SessionStore.clear()
             SessionStore.orgId = nil
+            organizations = []
             needsReauth = true
             apiError = nil
             renderFromFile()
@@ -138,6 +151,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             apiError = error
             renderFromFile()
         }
+    }
+
+    // Organizasyon listesini yalnızca bir kez çekiyoruz; her 20 saniyede bir
+    // tekrar sormanın anlamı yok, bu liste neredeyse hiç değişmiyor.
+    @MainActor
+    private func loadOrganizationsIfNeeded() async {
+        guard organizations.isEmpty else { return }
+        organizations = (try? await UsageAPI.organizations()) ?? []
     }
 
     private func renderFromFile() {
@@ -161,22 +182,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let stale = snapshot.source == .localFile && age > staleMs
         let headline = snapshot.windows.first?.percent ?? 0
 
-        // Menü çubuğundaki "⚡ %14" yazısı — bu menü açıkken bile
+        // Menü çubuğundaki "⚡ 14%" yazısı — bu menü açıkken bile
         // güncellenebilir, çünkü menünün bir parçası değil.
         statusItem.button?.attributedTitle = attributed(
-            " %\(headline)", color: stale ? .disabledControlTextColor : colorFor(headline)
+            " \(headline)%", color: stale ? .disabledControlTextColor : colorFor(headline)
         )
 
         // Kullanıcı tam o an menüyü açmışsa, altından değiştirmiyoruz.
         guard !menuIsOpen else { return }
 
         // NSMenu = tıklayınca açılan dropdown'ın kendisi. Her satır bir
-        // NSMenuItem. SwiftBar'da bunu satır satır metin yazarak yapıyorduk
-        // (line("...", "color=...")), burada aynı şeyi doğrudan AppKit
-        // nesneleri oluşturarak yapıyoruz.
+        // NSMenuItem.
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(withTitle: "Claude Kullanım Limitleri", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Claude Usage Limits", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
 
         // "for window in snapshot.windows" = JS'teki "for (const w of ...)" ile aynı
@@ -186,10 +205,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 isEstimate: window.resetIsEstimate, now: now
             )
 
-            // action: nil, keyEquivalent: "" = "bu satıra tıklanınca hiçbir
-            // şey olmasın, klavye kısayolu da yok" — sadece bilgi göstermek için
-            addRow(to: menu, "\(window.label): %\(window.percent)", color: colorFor(window.percent))
-            addRow(to: menu, "   Sıfırlanma: \(reset)", color: grayText, small: true)
+            addRow(to: menu, "\(window.label): \(window.percent)%", color: colorFor(window.percent))
+            addRow(to: menu, "   Resets: \(reset)", color: grayText, small: true)
         }
 
         menu.addItem(.separator())
@@ -197,27 +214,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if stale {
             addRow(
-                to: menu, "⚠️ Veri bayat — Claude uygulaması kapalı olabilir",
+                to: menu, "⚠️ Data is stale — Claude may not be running",
                 color: warningColor, small: true
             )
         }
         if needsReauth {
-            addRow(
-                to: menu, "⚠️ Oturum süresi doldu — yeniden giriş yapın",
-                color: warningColor, small: true
-            )
+            addRow(to: menu, "⚠️ Session expired — please sign in again", color: warningColor, small: true)
         }
         if let apiError {
             addRow(
-                to: menu, "⚠️ Canlı veri alınamadı: \(apiError.localizedDescription)",
+                to: menu, "⚠️ Live data unavailable: \(apiError.localizedDescription)",
                 color: warningColor, small: true
             )
         }
 
         appendFooter(to: menu)
         // Bu satır menüyü fiilen simgeye bağlıyor — kullanıcı tıklayınca
-        // AppKit bu menu nesnesini otomatik açar, bizim ayrıca "tıklandı"
-        // kodu yazmamıza gerek yok.
+        // AppKit bu menu nesnesini otomatik açar.
         statusItem.menu = menu
     }
 
@@ -226,17 +239,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func sourceLine(snapshot: UsageSnapshot, age: Double) -> String {
         switch snapshot.source {
         case .api:
-            return "Kaynak: claude.ai (canlı)"
+            return "Source: claude.ai (live)"
         case .localFile:
             let clock = DateFormatter()
             clock.dateFormat = "HH:mm"
             let clockStr = clock.string(from: snapshot.capturedAt)
-            return "Kaynak: yerel dosya · \(clockStr) (\(formatDuration(age)) önce)"
+            return "Source: local file · \(clockStr) (\(formatDuration(age)) ago)"
         }
     }
 
-    // JSON okunamadığında/bozuk olduğunda ve giriş de yapılmamışken
-    // gösterilen menü.
+    // JSON okunamadığında/bozuk olduğunda ve giriş YAPILMIŞKEN gösterilen menü.
     private func renderError(_ error: Error) {
         // Giriş yapılmamışsa ortada bir ARIZA yok — kullanıcı henüz
         // bağlanmamış demektir. Bunu hata ekranı gibi göstermek, uygulamayı
@@ -253,18 +265,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(withTitle: "Claude kullanım verisi okunamadı", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Couldn't read Claude usage data", action: nil, keyEquivalent: "")
         // error.localizedDescription = Swift'in hatayı otomatik olarak
         // okunabilir bir cümleye çevirmesi (JS'teki err.message gibi)
-        addRow(to: menu, "Hata: \(error.localizedDescription)", color: grayText, small: true)
+        addRow(to: menu, "Error: \(error.localizedDescription)", color: grayText, small: true)
         if let apiError {
-            addRow(to: menu, "Canlı veri: \(apiError.localizedDescription)", color: grayText, small: true)
+            addRow(to: menu, "Live data: \(apiError.localizedDescription)", color: grayText, small: true)
         }
-        addRow(
-            to: menu,
-            "Canlı veri için \"Claude ile Giriş Yap\"ı kullanın ya da Claude masaüstü uygulamasını açın",
-            color: grayText, small: true
-        )
         appendFooter(to: menu)
         statusItem.menu = menu
     }
@@ -280,17 +287,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
 
         if needsReauth {
-            menu.addItem(withTitle: "Oturum süresi doldu", action: nil, keyEquivalent: "")
-            addRow(
-                to: menu, "Kullanımınızı görmek için yeniden giriş yapın",
-                color: grayText, small: true
-            )
+            menu.addItem(withTitle: "Session expired", action: nil, keyEquivalent: "")
+            addRow(to: menu, "Sign in again to see your usage", color: grayText, small: true)
         } else {
-            menu.addItem(withTitle: "Henüz giriş yapılmadı", action: nil, keyEquivalent: "")
-            addRow(
-                to: menu, "Kullanım limitlerinizi görmek için Claude ile giriş yapın",
-                color: grayText, small: true
-            )
+            menu.addItem(withTitle: "Not signed in", action: nil, keyEquivalent: "")
+            addRow(to: menu, "Sign in with Claude to see your usage limits", color: grayText, small: true)
         }
 
         appendFooter(to: menu)
@@ -305,10 +306,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item)
     }
 
-    // Her menünün altına eklenen ortak kısım: giriş/çıkış, "Claude'u Aç"
-    // ve "Çıkış" butonları.
+    // Her menünün altına eklenen ortak kısım.
     private func appendFooter(to menu: NSMenu) {
         menu.addItem(.separator())
+
+        appendOrganizationMenu(to: menu)
 
         // Giriş durumuna göre tek bir satır: ya giriş teklif ediyoruz ya da
         // mevcut oturumu kapatma seçeneği sunuyoruz.
@@ -319,21 +321,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // hâlâ kullanılan "target-action" tıklama deseni.
         let signedIn = SessionStore.sessionKey != nil
         let authItem = NSMenuItem(
-            title: signedIn ? "Oturumu Kapat" : "Claude ile Giriş Yap…",
+            title: signedIn ? "Sign Out" : "Sign In with Claude…",
             action: signedIn ? #selector(signOut) : #selector(signIn),
             keyEquivalent: ""
         )
         authItem.target = self
         menu.addItem(authItem)
 
-        let openItem = NSMenuItem(title: "Claude'u Aç", action: #selector(openClaude), keyEquivalent: "")
+        appendStartAtLoginItem(to: menu)
+
+        let openItem = NSMenuItem(title: "Open Claude", action: #selector(openClaude), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
 
         // NSApplication.terminate zaten AppKit'in hazır "uygulamayı kapat"
         // fonksiyonu, kendimiz yazmamıza gerek yok. keyEquivalent: "q" ise
         // ⌘Q kısayolunu bu menü öğesine bağlıyor.
-        menu.addItem(NSMenuItem(title: "Çıkış", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    }
+
+    // Birden fazla organizasyon varsa hangisine baktığımızı seçilebilir
+    // yapıyoruz. Tek organizasyon varsa (kullanıcıların çoğu) bu menüyü hiç
+    // göstermiyoruz — gereksiz kalabalık olurdu.
+    private func appendOrganizationMenu(to menu: NSMenu) {
+        guard organizations.count > 1 else { return }
+
+        let parent = NSMenuItem(title: "Organization", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+
+        for org in organizations {
+            let item = NSMenuItem(title: org.name, action: #selector(selectOrganization(_:)), keyEquivalent: "")
+            item.target = self
+            // representedObject = menü öğesine iliştirilen serbest veri;
+            // tıklanınca hangi organizasyonun seçildiğini buradan okuyoruz.
+            item.representedObject = org.uuid
+            item.state = (org.uuid == SessionStore.orgId) ? .on : .off  // seçili olana tik
+            submenu.addItem(item)
+        }
+
+        parent.submenu = submenu
+        menu.addItem(parent)
+    }
+
+    // "Girişte başlat" anahtarı. SMAppService (macOS 13+), kullanıcının
+    // Sistem Ayarları > Genel > Giriş Öğeleri listesine uygulamayı ekler —
+    // yani kullanıcının oraya elle gidip uğraşmasına gerek kalmıyor.
+    private func appendStartAtLoginItem(to menu: NSMenu) {
+        // SMAppService yalnızca gerçek bir .app paketinde çalışır; kaynaktan
+        // doğrudan çalıştırılan çıplak ikilide bu seçeneği hiç göstermiyoruz,
+        // yoksa tıklayınca sessizce hata verirdi.
+        guard isBundledApp else { return }
+
+        let item = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin), keyEquivalent: "")
+        item.target = self
+        item.state = startsAtLogin ? .on : .off
+        menu.addItem(item)
+    }
+
+    private var isBundledApp: Bool {
+        Bundle.main.bundleURL.pathExtension == "app"
+    }
+
+    private var startsAtLogin: Bool {
+        SMAppService.mainApp.status == .enabled
     }
 
     // MARK: - Menü açık/kapalı takibi (NSMenuDelegate)
@@ -356,8 +406,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginWindow.present { [weak self] sessionKey in
             SessionStore.save(sessionKey: sessionKey)
             // Farklı bir hesapla girilmiş olabilir; önbellekteki org
-            // kimliği artık geçersiz sayılmalı.
+            // kimliği ve listesi artık geçersiz sayılmalı.
             SessionStore.orgId = nil
+            self?.organizations = []
             self?.needsReauth = false
             self?.refresh()
         }
@@ -366,16 +417,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func signOut() {
         SessionStore.clear()
         SessionStore.orgId = nil
+        organizations = []
         apiError = nil
         needsReauth = false  // kullanıcı kendi isteğiyle çıktı, uyarıya gerek yok
 
-        // Keychain'i silmek yetmiyor: WebKit'in kalici deposundaki claude.ai
-        // oturum cerezi de gitmeli, yoksa "cikis yaptim" demek gercekte
-        // dogru olmaz (bkz. LoginWindowController.clearStoredWebSession).
+        // Keychain'i silmek yetmiyor: WebKit'in kalıcı deposundaki claude.ai
+        // oturum çerezi de gitmeli, yoksa "çıkış yaptım" demek gerçekte
+        // doğru olmaz (bkz. LoginWindowController.clearStoredWebSession).
         LoginWindowController.clearStoredWebSession { [weak self] in
             self?.refresh()
         }
-        refresh()  // temizlik bitmeden de arayuz hemen guncellensin
+        refresh()  // temizlik bitmeden de arayüz hemen güncellensin
+    }
+
+    @objc private func selectOrganization(_ sender: NSMenuItem) {
+        guard let uuid = sender.representedObject as? String else { return }
+        SessionStore.orgId = uuid
+        refresh()
+    }
+
+    @objc private func toggleStartAtLogin() {
+        do {
+            if startsAtLogin {
+                try SMAppService.mainApp.unregister()
+                log("start at login disabled")
+            } else {
+                try SMAppService.mainApp.register()
+                log("start at login enabled")
+            }
+        } catch {
+            // Bunu sessizce yutmuyoruz ama uygulamayı da kırmıyoruz:
+            // kullanıcı her zaman Sistem Ayarları'ndan elle ekleyebilir.
+            log("start at login failed: \(error.localizedDescription)")
+        }
+        refresh()  // menüdeki tik işaretini güncelle
     }
 
     @objc private func openClaude() {

@@ -41,7 +41,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 <dict>
     <key>CFBundleExecutable</key>          <string>$APP_NAME</string>
     <key>CFBundleIdentifier</key>          <string>$BUNDLE_ID</string>
-    <key>CFBundleName</key>                <string>Claude Kullanım</string>
+    <key>CFBundleName</key>                <string>Claude Usage</string>
     <key>CFBundlePackageType</key>         <string>APPL</string>
     <key>CFBundleShortVersionString</key>  <string>$VERSION</string>
     <key>CFBundleVersion</key>             <string>$VERSION</string>

@@ -39,8 +39,8 @@ struct LimitWindow {
 // "let" = değişmeyen sabit (JS'teki const gibi). Bu dosyanın en üst
 // seviyesinde tanımlanan sabitler, programın her yerinden erişilebilir.
 let limits: [LimitWindow] = [
-    LimitWindow(key: \.fh, label: "5 Saatlik Oturum", windowMs: 5 * 60 * 60 * 1000),
-    LimitWindow(key: \.sd, label: "Haftalık (7 gün)", windowMs: 7 * 24 * 60 * 60 * 1000),
+    LimitWindow(key: \.fh, label: "Current session", windowMs: 5 * 60 * 60 * 1000),
+    LimitWindow(key: \.sd, label: "Weekly (7 days)", windowMs: 7 * 24 * 60 * 60 * 1000),
 ]
 
 let staleMs: Double = 15 * 60 * 1000  // bu süreden eskiyse veriyi "bayat" sayıyoruz
@@ -138,14 +138,14 @@ func estimateReset(
 
 // Milisaniyeyi "4s 32dk" gibi okunaklı bir Türkçe metne çeviriyor.
 func formatDuration(_ ms: Double) -> String {
-    if ms <= 0 { return "birazdan" }
+    if ms <= 0 { return "soon" }
     let totalMin = Int((ms / 60000).rounded())
     let days = totalMin / 1440
     let hours = (totalMin % 1440) / 60
     let mins = totalMin % 60
-    if days > 0 { return "\(days)g \(hours)s" }  // \(...) = string interpolation, JS'teki ${...} ile ayni
-    if hours > 0 { return "\(hours)s \(mins)dk" }
-    return "\(mins)dk"
+    if days > 0 { return "\(days)d \(hours)h" }  // \(...) = string interpolation, JS'teki ${...} ile ayni
+    if hours > 0 { return "\(hours)h \(mins)m" }
+    return "\(mins)m"
 }
 
 // Menüde "Sıfırlanma: ..." satırında gösterilecek metni üretir. Veri canlı
@@ -155,10 +155,10 @@ func resetLabel(percent: Int, resetAt: Date?, isEstimate: Bool, now: Date) -> St
     // "if let resetAt" = "resetAt gerçekten bir değer içeriyorsa, onu aç ve kullan"
     if let resetAt {
         let text = formatDuration(resetAt.timeIntervalSince(now) * 1000)
-        return isEstimate ? "\(text) (tahmini)" : text
+        return isEstimate ? "\(text) (estimated)" : text
     }
-    if percent == 0 { return "henüz kullanım yok" }
-    return "bilinmiyor"
+    if percent == 0 { return "no usage yet" }
+    return "unknown"
 }
 
 // Yerel dosyadan okunan ham örnekleri, canlı API'nin de kullandığı ortak

@@ -8,7 +8,7 @@ import WebKit
 func log(_ message: String) {
     let clock = DateFormatter()
     clock.dateFormat = "HH:mm:ss"
-    print("[giris \(clock.string(from: Date()))] \(message)")
+    print("[\(clock.string(from: Date()))] \(message)")
     // Terminale aninda dussun; yoksa cikti tamponda bekleyebilir.
     fflush(stdout)
 }
@@ -87,7 +87,7 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
             let claudeRecords = records.filter { $0.displayName.contains("claude.ai") }
 
             store.removeData(ofTypes: types, for: claudeRecords) {
-                log("claude.ai oturum verisi temizlendi (\(claudeRecords.count) kayit)")
+                log("cleared claude.ai web data (\(claudeRecords.count) records)")
                 completion()
             }
         }
@@ -112,7 +112,7 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
         let webView = makeWebView(configuration: configuration)
         self.webView = webView
 
-        let window = makeWindow(for: webView, title: "Claude ile Giris Yap")
+        let window = makeWindow(for: webView, title: "Sign In with Claude")
         self.window = window
 
         webView.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
@@ -145,9 +145,9 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
     // passkey ekranina kadar gidip orada "bir hata olustu" ile karsilasiyor
     // ve neden basarisiz oldugunu anlamiyor.
     private static let hintText =
-        "Passkey bu pencerede çalışmaz. Google'da passkey ekranı çıkarsa "
-        + "\"Try another way\" deyip şifrenizi kullanın — ya da daha kolayı, "
-        + "e-posta ile giriş yapın."
+        "Passkeys don't work in this window. If Google shows a passkey prompt, "
+        + "choose \"Try another way\" and use your password — or simply sign in "
+        + "with your email instead."
 
     private func makeHintLabel() -> NSTextField {
         // wrappingLabelWithString = secilemeyen, satir kaydiran bir etiket
@@ -223,8 +223,8 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
     // Her sayfa yuklemesi bittiginde WebKit bunu cagirir — zamanlayiciya
     // ek olarak, girisin hemen ardindan aninda tepki verebilmek icin.
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        let which = webView === popupWebView ? "popup" : "ana"
-        log("\(which) pencere yuklendi: \(safeURL(webView.url))")
+        let which = webView === popupWebView ? "popup" : "main"
+        log("\(which) window loaded: \(safeURL(webView.url))")
         updateTitle(for: webView)
         captureSessionKey()
     }
@@ -244,7 +244,7 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
     private func updateTitle(for webView: WKWebView) {
         let host = webView.url?.host ?? "?"
         // http (sifresiz) bir adrese duserse bu acikca belli olmali.
-        let mark = webView.url?.scheme == "https" ? "🔒" : "⚠️ GUVENSIZ —"
+        let mark = webView.url?.scheme == "https" ? "🔒" : "⚠️ NOT SECURE —"
         let title = "\(mark) \(host)"
 
         if webView === popupWebView {
@@ -256,14 +256,14 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
 
     // Sayfa yuklenemezse sebebini gorelim.
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        log("yukleme hatasi: \(safeURL(webView.url)) — \(error.localizedDescription)")
+        log("load failed: \(safeURL(webView.url)) — \(error.localizedDescription)")
     }
 
     func webView(
         _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
-        log("baglanti hatasi: \(safeURL(webView.url)) — \(error.localizedDescription)")
+        log("connection failed: \(safeURL(webView.url)) — \(error.localizedDescription)")
     }
 
     private func captureSessionKey() {
@@ -287,7 +287,7 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
             guard key != self.validatingKey, !self.rejectedKeys.contains(key) else { return }
 
             self.validatingKey = key
-            log("sessionKey cerezi bulundu, dogrulaniyor...")
+            log("sessionKey cookie found, validating…")
             Task { await self.validate(key) }
         }
     }
@@ -310,20 +310,20 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
 
             switch result {
             case .valid:
-                log("sessionKey gecerli — giris tamamlandi")
+                log("sessionKey valid — sign-in complete")
                 self.finish(with: key)
 
             case .invalid:
                 // Sunucu acikca reddetti; bir daha bu degeri denemeyelim ama
                 // pencereyi acik birakalim — kullanici girisi tamamlayinca
                 // cerez yeni bir degerle guncellenecek ve onu dogrulayacagiz.
-                log("sessionKey gecersiz — giris akisi devam ediyor")
+                log("sessionKey rejected — sign-in still in progress")
                 self.rejectedKeys.insert(key)
 
             case .unreachable:
                 // Sonuc belirsiz. Anahtari KARALISTEYE ALMIYORUZ — sadece
                 // birakip gecıyoruz; zamanlayici birazdan tekrar deneyecek.
-                log("dogrulama yapilamadi (ag sorunu?) — tekrar denenecek")
+                log("validation inconclusive (network?) — will retry")
             }
         }
     }
@@ -359,10 +359,10 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
         // kullanmak zorundayiz. Kendi yenimizi kurarsak popup, acan
         // sayfayla ayni oturumu (ve cerezleri) paylasmaz ve OAuth akisi
         // yine kirilir.
-        log("popup acildi: \(safeURL(navigationAction.request.url))")
+        log("popup opened: \(safeURL(navigationAction.request.url))")
 
         let popup = makeWebView(configuration: configuration)
-        let popupWindow = makeWindow(for: popup, title: "Giris")
+        let popupWindow = makeWindow(for: popup, title: "Signing in…")
 
         self.popupWebView = popup
         self.popupWindow = popupWindow
@@ -374,7 +374,7 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
     // OAuth bittiginde popup kendini kapatmak ister (window.close).
     func webViewDidClose(_ webView: WKWebView) {
         guard webView === popupWebView else { return }
-        log("popup kapandi")
+        log("popup closed")
         closePopup()
         // Popup kapandiginda giris tamamlanmis olabilir; beklemeden bak.
         captureSessionKey()
