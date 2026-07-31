@@ -32,19 +32,31 @@ function formatDuration(ms) {
   return `${mins}dk`;
 }
 
-// fh/sd bir öncekinden düştüyse o an yeni pencere baslamis demektir.
+// Mevcut pencerenin ne zaman basladigini bulmak icin, en son ornekten
+// geriye dogru "hala 0 olmayan" ardisik serinin basina kadar gidiyoruz.
+// Deger zaten 0'ken sessizce sifirlanan pencereler icin (0 -> 0 gecisi
+// tespit edilemez) bu, eski "sadece dususu ara" mantigindan daha guvenilir.
 function estimateReset(samples, key, windowMs, now) {
-  for (let i = samples.length - 1; i > 0; i--) {
-    if (samples[i].u[key] < samples[i - 1].u[key]) {
-      const resetAt = samples[i].t + windowMs;
-      if (resetAt > now) return resetAt;
-    }
-  }
-  return null;
+  const n = samples.length;
+  const current = samples[n - 1].u[key];
+  if (current === 0) return null; // pencere henuz baslamadi
+
+  let i = n - 1;
+  while (i > 0 && samples[i - 1].u[key] !== 0) i--;
+  const windowStart = i > 0 ? (samples[i - 1].t + samples[i].t) / 2 : samples[i].t;
+
+  const resetAt = windowStart + windowMs;
+  return resetAt > now ? resetAt : null;
 }
 
 function line(text, params) {
   return params ? `${text} | ${params}` : text;
+}
+
+function resetLabel(pct, resetAt, now) {
+  if (pct === 0) return "henüz kullanım yok";
+  if (resetAt) return formatDuration(resetAt - now);
+  return "bilinmiyor";
 }
 
 const out = [];
@@ -68,19 +80,13 @@ try {
   out.push(line(`5 Saatlik Oturum: %${fh}`, `color=${colorFor(fh)}`));
   const resetFh = estimateReset(samples, "fh", FIVE_HOURS_MS, now);
   out.push(
-    line(
-      `   Sıfırlanma (tahmini): ${resetFh ? formatDuration(resetFh - now) : "bilinmiyor"}`,
-      "size=12 color=gray"
-    )
+    line(`   Sıfırlanma (tahmini): ${resetLabel(fh, resetFh, now)}`, "size=12 color=gray")
   );
 
   out.push(line(`Haftalık (7 gün): %${sd}`, `color=${colorFor(sd)}`));
   const resetSd = estimateReset(samples, "sd", SEVEN_DAYS_MS, now);
   out.push(
-    line(
-      `   Sıfırlanma (tahmini): ${resetSd ? formatDuration(resetSd - now) : "bilinmiyor"}`,
-      "size=12 color=gray"
-    )
+    line(`   Sıfırlanma (tahmini): ${resetLabel(sd, resetSd, now)}`, "size=12 color=gray")
   );
 
   out.push("---");
