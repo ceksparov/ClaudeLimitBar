@@ -70,9 +70,32 @@ func loadHistory() throws -> [RawSample] {
     return history.samples
 }
 
-// Mevcut pencerenin baslangici: son ornekten geriye dogru, degerin 0
-// olmadigi ardisik serinin basi. Pencere deger zaten 0'ken sifirlanabildigi
-// icin (0 -> 0 gecisi gorunmez) "dususu ara" yaklasimindan daha guvenilir.
+// fromIndex'ten geriye dogru, degerin sifir olmadigi son "serinin" basladigi
+// ilk ornegin index'ini dondurur.
+func streakStartIndex(_ samples: [RawSample], from: Int, key: KeyPath<RawUsage, Int>) -> Int {
+    var i = from
+    while i > 0 && samples[i - 1].u[keyPath: key] != 0 { i -= 1 }
+    return i
+}
+
+// from (dahil, degeri sifir olan) bir ornekten geriye dogru, ayni sifir
+// "platosunun" basladigi ilk ornegin index'ini dondurur. Kullanici saatlerce
+// Claude'u acmadiysa, bu plato onlarca orneklik duz bir sifir serisi olabilir.
+func zeroPlateauStartIndex(_ samples: [RawSample], from: Int, key: KeyPath<RawUsage, Int>) -> Int {
+    var i = from
+    while i > 0 && samples[i - 1].u[keyPath: key] == 0 { i -= 1 }
+    return i
+}
+
+// Mevcut pencerenin baslangici. Bir sifir platosu sadece, hemen ardindan
+// gelen deger platodan onceki degerden gercekten dusukse "gercek
+// sifirlanma" sayilir. Ani bir sifirdan sonra deger dogrudan eski
+// seviyesine sicriyorsa (yavasca yukselmiyorsa), bu Claude uygulamasinin bir
+// anlik raporlama hatasidir - yoksa boyle sahte sifirlar pencerenin cok
+// daha once basladigini sanip tahmini saatlerce yanlis hesaplatabilir.
+// Gercek bir sifirlanma bulununca pencere, o an degil, kullanicinin ilk
+// gercek kullanim aninda baslar (reset ile ilk kullanim arasinda, ör. gece
+// boyu kullanilmadiysa, uzun bir bosluk olsa bile dogru sonuc verir).
 //
 // "key: KeyPath<RawUsage, Int>" parametresi sayesinde bu TEK fonksiyon hem
 // fh hem sd için çalışıyor — çağıran taraf hangisine bakacağını \.fh ya da
@@ -83,15 +106,26 @@ func estimateReset(
     // "guard let" = "last diye bir şey varsa devam et, yoksa hemen çık (return)".
     // samples.last, dizi boşsa nil döner; bu satır o durumu güvenle ele alıyor.
     guard let last = samples.last else { return nil }
-    // last.u[keyPath: key] = "last.u.fh" ya da "last.u.sd" demenin, key
-    // parametresine göre değişebilen hâli
     if last.u[keyPath: key] == 0 { return nil }
 
     var i = samples.count - 1
-    while i > 0 && samples[i - 1].u[keyPath: key] != 0 { i -= 1 }
-    let windowStart: Double =
-        i > 0 ? (samples[i - 1].t + samples[i].t) / 2 : samples[i].t
+    while true {
+        let streakStart = streakStartIndex(samples, from: i, key: key)
+        if streakStart == 0 { i = 0; break }
 
+        let plateauStart = zeroPlateauStartIndex(samples, from: streakStart - 1, key: key)
+        let valueBeforeZero = plateauStart > 0 ? samples[plateauStart - 1].u[keyPath: key] : Int.max
+        let valueAfterZero = samples[streakStart].u[keyPath: key]
+
+        if valueAfterZero < valueBeforeZero {
+            i = streakStart  // gercek sifirlanma bulundu
+            break
+        }
+        if plateauStart == 0 { i = 0; break }
+        i = plateauStart - 1  // sahte sifir platosu - onceki seriyle birlestir, daha eskiye bak
+    }
+
+    let windowStart = samples[i].t
     let resetAt = windowStart + windowMs
     return resetAt > now ? resetAt : nil
 }

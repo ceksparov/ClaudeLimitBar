@@ -36,16 +36,54 @@ function formatDuration(ms) {
   return `${mins}dk`;
 }
 
-// Mevcut pencerenin baslangici: son ornekten geriye dogru, degerin 0 olmadigi
-// ardisik serinin basi. Pencere deger zaten 0'ken sifirlanabildigi icin
-// (0 -> 0 gecisi gorunmez) "dususu ara" yaklasimindan daha guvenilir.
+// fromIndex'ten geriye dogru, degerin sifir olmadigi son "serinin" basladigi
+// ilk ornegin index'ini dondurur.
+function streakStartIndex(samples, fromIndex, key) {
+  let i = fromIndex;
+  while (i > 0 && samples[i - 1].u[key] !== 0) i--;
+  return i;
+}
+
+// fromIndex (dahil, degeri sifir olan) bir ornekten geriye dogru, ayni
+// sifir "platosunun" basladigi ilk ornegin index'ini dondurur. Kullanici
+// saatlerce Claude'u acmadiysa, bu plato onlarca orneklik duz bir sifir
+// serisi olabilir.
+function zeroPlateauStartIndex(samples, fromIndex, key) {
+  let i = fromIndex;
+  while (i > 0 && samples[i - 1].u[key] === 0) i--;
+  return i;
+}
+
+// Mevcut pencerenin baslangici. Bir sifir platosu sadece, hemen ardindan
+// gelen deger platodan onceki degerden gercekten dusukse "gercek
+// sifirlanma" sayilir. Ani bir sifirdan sonra deger dogrudan eski
+// seviyesine sicriyorsa (yavasca yukselmiyorsa), bu Claude uygulamasinin
+// bir anlik raporlama hatasidir - yoksa boyle sahte sifirlar pencerenin
+// cok daha once basladigini sanip tahmini saatlerce yanlis hesaplatabilir.
+// Gercek bir sifirlanma bulununca pencere, o an degil, kullanicinin ilk
+// gercek kullanim aninda baslar (reset ile ilk kullanim arasinda, ör. gece
+// boyu kullanilmadiysa, uzun bir bosluk olsa bile dogru sonuc verir).
 function estimateReset(samples, key, windowMs, now) {
   if (samples.at(-1).u[key] === 0) return null;
 
   let i = samples.length - 1;
-  while (i > 0 && samples[i - 1].u[key] !== 0) i--;
-  const windowStart = i > 0 ? (samples[i - 1].t + samples[i].t) / 2 : samples[i].t;
+  while (true) {
+    const streakStart = streakStartIndex(samples, i, key);
+    if (streakStart === 0) { i = 0; break; }
 
+    const plateauStart = zeroPlateauStartIndex(samples, streakStart - 1, key);
+    const valueBeforeZero = plateauStart > 0 ? samples[plateauStart - 1].u[key] : Infinity;
+    const valueAfterZero = samples[streakStart].u[key];
+
+    if (valueAfterZero < valueBeforeZero) {
+      i = streakStart; // gercek sifirlanma bulundu
+      break;
+    }
+    if (plateauStart === 0) { i = 0; break; }
+    i = plateauStart - 1; // sahte sifir platosu - onceki seriyle birlestir, daha eskiye bak
+  }
+
+  const windowStart = samples[i].t;
   const resetAt = windowStart + windowMs;
   return resetAt > now ? resetAt : null;
 }
