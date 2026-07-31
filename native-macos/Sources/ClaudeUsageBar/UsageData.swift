@@ -70,63 +70,69 @@ func loadHistory() throws -> [RawSample] {
     return history.samples
 }
 
-// fromIndex'ten geriye dogru, degerin sifir olmadigi son "serinin" basladigi
-// ilk ornegin index'ini dondurur.
-func streakStartIndex(_ samples: [RawSample], from: Int, key: KeyPath<RawUsage, Int>) -> Int {
-    var i = from
-    while i > 0 && samples[i - 1].u[keyPath: key] != 0 { i -= 1 }
-    return i
+// Claude uygulamasi arada bir, tek bir ornekte hatali sifir bildiriyor.
+// Boyle bir ornek, oncesi ve sonrasina bakinca anlasilir: deger sifirdan
+// sonra DOGRUDAN eski seviyesine donuyorsa ortada gercek bir sifirlanma
+// yoktur (gercek sifirlanmadan sonra deger sifirdan yavasca tirmanir),
+// sadece anlik bir raporlama hatasi vardir. Bu ornekleri hesaba katmadan
+// once ayikliyoruz.
+func withoutGlitches(_ samples: [RawSample], key: KeyPath<RawUsage, Int>) -> [RawSample] {
+    samples.enumerated().filter { index, sample in
+        // Sadece sifir degerleri supheli; ilk ve son ornegi karsilastiracak
+        // komsusu olmadigi icin oldugu gibi birakiyoruz.
+        guard sample.u[keyPath: key] == 0, index > 0, index < samples.count - 1 else { return true }
+
+        let before = samples[index - 1].u[keyPath: key]
+        let after = samples[index + 1].u[keyPath: key]
+        return !(before > 0 && after >= before)  // eski seviyeye dondu -> hatali okuma
+    }
+    .map(\.element)
 }
 
-// from (dahil, degeri sifir olan) bir ornekten geriye dogru, ayni sifir
-// "platosunun" basladigi ilk ornegin index'ini dondurur. Kullanici saatlerce
-// Claude'u acmadiysa, bu plato onlarca orneklik duz bir sifir serisi olabilir.
-func zeroPlateauStartIndex(_ samples: [RawSample], from: Int, key: KeyPath<RawUsage, Int>) -> Int {
-    var i = from
-    while i > 0 && samples[i - 1].u[keyPath: key] == 0 { i -= 1 }
-    return i
-}
-
-// Mevcut pencerenin baslangici. Bir sifir platosu sadece, hemen ardindan
-// gelen deger platodan onceki degerden gercekten dusukse "gercek
-// sifirlanma" sayilir. Ani bir sifirdan sonra deger dogrudan eski
-// seviyesine sicriyorsa (yavasca yukselmiyorsa), bu Claude uygulamasinin bir
-// anlik raporlama hatasidir - yoksa boyle sahte sifirlar pencerenin cok
-// daha once basladigini sanip tahmini saatlerce yanlis hesaplatabilir.
-// Gercek bir sifirlanma bulununca pencere, o an degil, kullanicinin ilk
-// gercek kullanim aninda baslar (reset ile ilk kullanim arasinda, ör. gece
-// boyu kullanilmadiysa, uzun bir bosluk olsa bile dogru sonuc verir).
+// Mevcut pencerenin ne zaman sifirlanacagini TAHMIN eder. (Giris yapilmissa
+// bu fonksiyona hic gerek yok — canli API kesin zamani veriyor. Burasi
+// yalnizca yedek yol.)
+//
+// Temel fikir: bir pencere icinde kullanim yuzdesi yalnizca ARTAR, asla
+// azalmaz. Dolayisiyla ardisik iki ornek arasindaki her DUSUS, arada bir
+// sifirlanma oldugunun kanitidir.
+//
+// Onceki surum sinirlari yalnizca 0 degerine bakarak ariyordu ve bu hatali
+// idi: sifirlanmadan hemen sonra kullanima devam edilirse deger hicbir
+// ornekte 0 gorunmez (gercek ornek: %92 -> %3). O durumda sinir kaciriliyor,
+// algoritma cok daha eski bir sinira yuruyor ve gecmiste kalan bir zaman
+// hesaplayip "bilinmiyor" donuyordu.
 //
 // "key: KeyPath<RawUsage, Int>" parametresi sayesinde bu TEK fonksiyon hem
 // fh hem sd için çalışıyor — çağıran taraf hangisine bakacağını \.fh ya da
-// \.sd olarak veriyor (bkz. AppDelegate.swift'teki kullanım).
+// \.sd olarak veriyor (bkz. UsageData.fileSnapshot'taki kullanım).
 func estimateReset(
     samples: [RawSample], key: KeyPath<RawUsage, Int>, windowMs: Double, now: Double
 ) -> Double? {  // dönüş tipindeki "?" = "ya bir sayı ya da hiçbir şey (nil)" demek — Optional
+    let samples = withoutGlitches(samples, key: key)
+
     // "guard let" = "last diye bir şey varsa devam et, yoksa hemen çık (return)".
-    // samples.last, dizi boşsa nil döner; bu satır o durumu güvenle ele alıyor.
-    guard let last = samples.last else { return nil }
-    if last.u[keyPath: key] == 0 { return nil }
+    guard let last = samples.last, last.u[keyPath: key] > 0 else { return nil }
 
+    // En son dususu (yani en yakin sifirlanmayi) geriye dogru tarayarak bul.
+    var boundary = 0  // hic dusus yoksa dosyanin basindan itibaren bakariz
     var i = samples.count - 1
-    while true {
-        let streakStart = streakStartIndex(samples, from: i, key: key)
-        if streakStart == 0 { i = 0; break }
-
-        let plateauStart = zeroPlateauStartIndex(samples, from: streakStart - 1, key: key)
-        let valueBeforeZero = plateauStart > 0 ? samples[plateauStart - 1].u[keyPath: key] : Int.max
-        let valueAfterZero = samples[streakStart].u[keyPath: key]
-
-        if valueAfterZero < valueBeforeZero {
-            i = streakStart  // gercek sifirlanma bulundu
+    while i > 0 {
+        if samples[i].u[keyPath: key] < samples[i - 1].u[keyPath: key] {
+            boundary = i
             break
         }
-        if plateauStart == 0 { i = 0; break }
-        i = plateauStart - 1  // sahte sifir platosu - onceki seriyle birlestir, daha eskiye bak
+        i -= 1
     }
 
-    let windowStart = samples[i].t
-    let resetAt = windowStart + windowMs
+    // Pencere, sifirlanma aninda degil, ondan sonraki ILK GERCEK KULLANIMDA
+    // baslar. Ornegin gece boyu Claude kullanilmadiysa, sifirlanma ile ilk
+    // kullanim arasinda saatlerce bosluk olabilir.
+    var start = boundary
+    while start < samples.count && samples[start].u[keyPath: key] == 0 { start += 1 }
+    guard start < samples.count else { return nil }
+
+    let resetAt = samples[start].t + windowMs
     return resetAt > now ? resetAt : nil
 }
 
@@ -142,11 +148,46 @@ func formatDuration(_ ms: Double) -> String {
     return "\(mins)dk"
 }
 
-// Menüde "Sıfırlanma (tahmini): ..." satırında gösterilecek metni üretir.
-// "resetAt: Double?" parametresindeki "?" yine Optional — resetAt olmayabilir.
-func resetLabel(pct: Int, resetAt: Double?, now: Double) -> String {
-    if pct == 0 { return "henüz kullanım yok" }
+// Menüde "Sıfırlanma: ..." satırında gösterilecek metni üretir. Veri canlı
+// API'den geldiyse sunucunun verdiği kesin zamanı yazıyoruz; yerel dosyadan
+// geldiyse kendi tahminimiz olduğunu kullanıcıya açıkça belirtiyoruz.
+func resetLabel(percent: Int, resetAt: Date?, isEstimate: Bool, now: Date) -> String {
     // "if let resetAt" = "resetAt gerçekten bir değer içeriyorsa, onu aç ve kullan"
-    if let resetAt { return formatDuration(resetAt - now) }
+    if let resetAt {
+        let text = formatDuration(resetAt.timeIntervalSince(now) * 1000)
+        return isEstimate ? "\(text) (tahmini)" : text
+    }
+    if percent == 0 { return "henüz kullanım yok" }
     return "bilinmiyor"
+}
+
+// Yerel dosyadan okunan ham örnekleri, canlı API'nin de kullandığı ortak
+// UsageSnapshot şekline çeviriyor. Bu dönüşüm sayesinde AppDelegate tek bir
+// çizim koduyla her iki kaynağı da gösterebiliyor (bkz. UsageSnapshot.swift).
+func fileSnapshot(samples: [RawSample], now: Double) -> UsageSnapshot {
+    guard let last = samples.last else {
+        return UsageSnapshot(windows: [], capturedAt: Date(), source: .localFile)
+    }
+
+    // "limits.map { ... }" = listedeki her eleman için köşeli parantez
+    // içindeki dönüşümü uygulayıp yeni bir liste üret (JS'teki .map ile aynı).
+    let windows = limits.map { limit in
+        UsageSnapshot.Window(
+            label: limit.label,
+            percent: last.u[keyPath: limit.key],
+            // estimateReset milisaniye döndürüyor; Date'e çeviriyoruz.
+            // "?.map" burada Optional üzerinde çalışır: değer varsa dönüştür,
+            // yoksa nil kalsın.
+            resetAt: estimateReset(
+                samples: samples, key: limit.key, windowMs: limit.windowMs, now: now
+            ).map { Date(timeIntervalSince1970: $0 / 1000) },
+            resetIsEstimate: true
+        )
+    }
+
+    return UsageSnapshot(
+        windows: windows,
+        capturedAt: Date(timeIntervalSince1970: last.t / 1000),
+        source: .localFile
+    )
 }
