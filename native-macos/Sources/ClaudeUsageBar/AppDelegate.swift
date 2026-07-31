@@ -228,6 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             organizationsLoadedAt = nil
             needsReauth = true
             apiError = nil
+            // Eski API anlık görüntüsünü de bırakmıyoruz: redraw() onu
+            // yeniden çizip, oturum kapalıyken "Source: claude.ai (live)"
+            // diyerek eski kullanım verisini gösterebilirdi.
+            lastSnapshot = nil
             renderFromFile()
 
         } catch {
@@ -281,6 +285,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Asıl "menü çubuğunda ne yazsın, dropdown'da neler olsun" mantığı burada.
     private func render(_ snapshot: UsageSnapshot) {
+        // Hiç pencere yoksa gösterecek bir şey de yok. Bunu "%0" diye
+        // göstermek YANLIŞ olur — kullanıcı hiç kullanmadığını sanır.
+        // (Sunucu bazı hesap türleri için her iki pencereyi de boş
+        // dönebiliyor; o zaman elimizde veri yok demektir, sıfır değil.)
+        guard !snapshot.windows.isEmpty else {
+            renderNoData()
+            return
+        }
+
         lastSnapshot = snapshot
         let now = Date()
         let age = now.timeIntervalSince(snapshot.capturedAt) * 1000
@@ -338,6 +351,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appendFooter(to: menu)
         // Bu satır menüyü fiilen simgeye bağlıyor — kullanıcı tıklayınca
         // AppKit bu menu nesnesini otomatik açar.
+        statusItem.menu = menu
+    }
+
+    // Sunucuya ulaştık ama hiçbir limit bilgisi gelmedi.
+    private func renderNoData() {
+        statusItem.button?.attributedTitle = attributed(" –", color: .disabledControlTextColor)
+        guard !menuIsOpen else { return }
+
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.addItem(withTitle: "No usage limits reported", action: nil, keyEquivalent: "")
+        addRow(
+            to: menu, "This account doesn't report session or weekly limits",
+            color: grayText, small: true
+        )
+        appendFooter(to: menu)
         statusItem.menu = menu
     }
 
@@ -437,9 +466,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         appendStartAtLoginItem(to: menu)
 
-        let openItem = NSMenuItem(title: "Open Claude", action: #selector(openClaude), keyEquivalent: "")
-        openItem.target = self
-        menu.addItem(openItem)
+        // "Open Claude" yalnızca Claude masaüstü uygulaması KURULUYSA
+        // gösteriliyor. Kurulu değilken bu satır tıklanınca hiçbir şey
+        // olmuyordu — ve bu, uygulamayı GitHub'dan indiren birinin çok
+        // muhtemel durumu (Claude masaüstü şart değil, giriş yeterli).
+        if claudeAppURL != nil {
+            let openItem = NSMenuItem(title: "Open Claude", action: #selector(openClaude), keyEquivalent: "")
+            openItem.target = self
+            menu.addItem(openItem)
+        }
 
         // NSApplication.terminate zaten AppKit'in hazır "uygulamayı kapat"
         // fonksiyonu, kendimiz yazmamıza gerek yok. keyEquivalent: "q" ise
@@ -539,6 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pauseUntil = nil
         apiError = nil
         needsReauth = false  // kullanıcı kendi isteğiyle çıktı, uyarıya gerek yok
+        lastSnapshot = nil   // eski canlı veri bir daha çizilmesin
 
         // Keychain'i silmek yetmiyor: WebKit'in kalıcı deposundaki claude.ai
         // oturum çerezi de gitmeli, yoksa "çıkış yaptım" demek gerçekte
@@ -581,16 +617,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         redraw()  // sadece menüdeki tik işaretini güncelle — ağa gitmeye gerek yok
     }
 
+    // Claude masaüstü uygulamasının yeri — kurulu değilse nil.
+    // "bundle identifier" ile arıyoruz, böylece /Applications dışına
+    // kurulmuş olsa bile bulunur.
+    private var claudeAppURL: URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.anthropic.claudefordesktop")
+    }
+
     @objc private func openClaude() {
-        // Önce Claude'u "bundle identifier" (uygulamanın benzersiz kimliği,
-        // com.anthropic.claudefordesktop) ile bulmayı dene — bu, uygulama
-        // /Applications dışında bir yere kurulmuş olsa bile çalışır.
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.anthropic.claudefordesktop") {
-            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-        } else {
-            // Bulunamazsa (ör. Claude kurulu değilse farklı bir yoldaysa),
-            // standart /Applications yoluna dönüş yap
-            NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Claude.app"))
-        }
+        guard let url = claudeAppURL else { return }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 }
