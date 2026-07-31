@@ -21,6 +21,8 @@ enum APIError: LocalizedError {
     // Sunucu "cok sik istek attin" dedi. retryAfter, sunucunun onerdigi
     // bekleme suresi (Retry-After basligi); vermemisse nil.
     case rateLimited(retryAfter: TimeInterval?)
+    // Cloudflare'in bot kontrolu. Oturumla ilgisi YOK, gecici bir engel.
+    case blocked
 
     var errorDescription: String? {
         switch self {
@@ -29,6 +31,7 @@ enum APIError: LocalizedError {
         case .badStatus(let code): return "Server returned \(code)"
         case .noOrganization: return "No organization found for this account"
         case .rateLimited: return "Rate limited — backing off"
+        case .blocked: return "Temporarily blocked by the site's bot check"
         }
     }
 }
@@ -107,8 +110,23 @@ enum UsageAPI {
             throw APIError.rateLimited(retryAfter: retryAfter)
         }
 
-        // claude.ai, gecersiz/eksik oturum icin 401 DEGIL 403 donuyor
-        // (olculdu). Ikisini de "oturum dusmus" sayiyoruz.
+        // claude.ai'nin onunde Cloudflare var. Bot kontrolu yaptiginda
+        // 403 + HTML bir sayfa donuyor ("Just a moment..."), gercek API ise
+        // her zaman JSON doner.
+        //
+        // Bu ayrim onemli cunku 403'u kosulsuz "oturum gecersiz" saymak,
+        // gecici bir bot kontrolunde kullanicinin GAYET GECERLI oturumunu
+        // silmemize yol acardi. Uygulamanin kendi istemcisi su an bu
+        // kontrole takilmiyor (olculdu; takilan curl idi) — yani bu bilinen
+        // bir arizanin duzeltmesi degil, ileride takilirsa oturumu yok
+        // etmemek icin konulmus bir koruma.
+        let isJSON = (http.value(forHTTPHeaderField: "Content-Type") ?? "").contains("json")
+
+        if !isJSON && (http.statusCode == 401 || http.statusCode == 403) {
+            throw APIError.blocked
+        }
+
+        // Sadece sunucunun GERCEK yaniti kimlik hatasi sayilir.
         if http.statusCode == 401 || http.statusCode == 403 { throw APIError.unauthorized }
         guard (200..<300).contains(http.statusCode) else { throw APIError.badStatus(http.statusCode) }
 

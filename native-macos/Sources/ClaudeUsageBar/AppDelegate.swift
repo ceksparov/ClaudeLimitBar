@@ -85,6 +85,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var isFetching = false
     private var lastFetchAt: Date?
 
+    // Üst üste kaç kez kimlik hatası aldık? Tek bir hatada kullanıcıyı
+    // çıkış yaptırmak riskli: yanlış karar verirsek insanın çalışan
+    // oturumunu yok etmiş oluruz. Üç kez üst üste (yani ~1 dakika boyunca)
+    // reddedilirse oturumun gerçekten bittiğine hükmediyoruz.
+    private var consecutiveAuthFailures = 0
+
+    // "Start at Login" kaydı başarısız olduysa sebebini menüde göstermek
+    // için saklıyoruz. Sadece log'a yazmak yetmiyor: paketlenmiş uygulamada
+    // stdout hiçbir yere gitmediği için kullanıcı tikin neden açılmadığını
+    // hiç öğrenemezdi.
+    private var startAtLoginError: String?
+
     // En son çizdiğimiz veri. Menüyü ağdan bir şey çekmeden yeniden
     // kurabilmek için saklıyoruz (ör. "Start at Login" tikini güncellemek
     // gerektiğinde sunucuya gitmenin anlamı yok).
@@ -173,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let snapshot = try await UsageAPI.fetchSnapshot()
             apiError = nil
             pauseUntil = nil
+            consecutiveAuthFailures = 0
             render(snapshot)
             await loadOrganizationsIfNeeded()
 
@@ -182,6 +195,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             pauseUntil = Date().addingTimeInterval(wait)
             log("rate limited — pausing for \(Int(wait))s")
             apiError = APIError.rateLimited(retryAfter: retryAfter)
+            renderFromFile()
+
+        } catch APIError.unauthorized where consecutiveAuthFailures < 2 {
+            // Henüz emin değiliz — anahtara dokunmadan yerel dosyaya düş.
+            consecutiveAuthFailures += 1
+            apiError = APIError.unauthorized
             renderFromFile()
 
         } catch APIError.unauthorized {
@@ -445,6 +464,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.target = self
         item.state = startsAtLogin ? .on : .off
         menu.addItem(item)
+
+        if let startAtLoginError {
+            addRow(to: menu, "   \(startAtLoginError)", color: warningColor, small: true)
+        }
     }
 
     private var isBundledApp: Bool {
@@ -474,6 +497,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func signIn() {
         loginWindow.present { [weak self] sessionKey in
             SessionStore.save(sessionKey: sessionKey)
+            // Farklı bir hesapla girilmiş olabilir; eski hesabın sıfırlanma
+            // zamanlarını taşımayalım.
+            SessionStore.clearResetCache()
             // Farklı bir hesapla girilmiş olabilir; önbellekteki org
             // kimliği ve listesi artık geçersiz sayılmalı.
             SessionStore.orgId = nil
@@ -507,6 +533,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let uuid = sender.representedObject as? String else { return }
         SessionStore.orgId = uuid
         lastSnapshot = nil  // artık başka bir organizasyona bakıyoruz
+        // Önbellekteki sıfırlanma zamanları ÖNCEKİ organizasyona ait.
+        SessionStore.clearResetCache()
         refresh(force: true)
     }
 
@@ -519,10 +547,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 try SMAppService.mainApp.register()
                 log("start at login enabled")
             }
+            startAtLoginError = nil
         } catch {
-            // Bunu sessizce yutmuyoruz ama uygulamayı da kırmıyoruz:
-            // kullanıcı her zaman Sistem Ayarları'ndan elle ekleyebilir.
+            // Uygulamayı kırmıyoruz ama sessizce de geçmiyoruz — kullanıcı
+            // tikin neden değişmediğini görmeli ve elle ekleyebileceğini
+            // bilmeli.
             log("start at login failed: \(error.localizedDescription)")
+            startAtLoginError = "Could not change — add it in System Settings › General › Login Items"
         }
         redraw()  // sadece menüdeki tik işaretini güncelle — ağa gitmeye gerek yok
     }

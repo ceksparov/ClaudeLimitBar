@@ -95,6 +95,14 @@ enum SessionStore {
         return Date(timeIntervalSince1970: seconds)
     }
 
+    // Bakilan hesap ya da organizasyon degistiginde cagrilir. Onbellekteki
+    // zamanlar ONCEKI organizasyona ait; temizlemezsek, API'ye ulasilamadigi
+    // bir anda baska bir organizasyonun sifirlanma zamanini "kesin" diye
+    // gosteririz.
+    static func clearResetCache() {
+        for id in ["fiveHour", "sevenDay"] { setCachedResetAt(id, nil) }
+    }
+
     static func setCachedResetAt(_ id: String, _ date: Date?) {
         let key = "resetAt.\(id)"
         if let date {
