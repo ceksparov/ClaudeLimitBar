@@ -131,6 +131,18 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
         // surekli yeniden giris yapmak zorunda kalirdi.
         configuration.websiteDataStore = .default()
 
+        // Betigi yalnizca BURAYA, kendi olusturdugumuz yapilandirmaya
+        // ekliyoruz. Popup'lar WebKit'in verdigi yapilandirmayi kullaniyor
+        // (bkz. createWebViewWith) ve oraya dokunmamiz gereksiz — Google'in
+        // kendi sayfasinda yeniden siralanacak bir sey yok.
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: Self.reorderLoginFormScript,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true
+            )
+        )
+
         let webView = makeWebView(configuration: configuration)
         self.webView = webView
 
@@ -178,6 +190,55 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
         + "If you'd rather use Google, note that passkeys don't work in this "
         + "window: when the passkey prompt appears, choose \"Try another way\" "
         + "and use your password."
+
+    // claude.ai'nin giris formunda e-posta secenegini Google'in USTUNE tasiyan
+    // kucuk bir betik. Uyari metnini "once e-posta" diye degistirmek tek
+    // basina yetmiyordu: sayfada Google butonu hala en ustte durdugu icin
+    // goz once onu goruyor, yani onerdigimiz yol pratikte ikinci sirada
+    // kaliyordu.
+    //
+    // DOM'u yeniden duzenlemiyoruz — sadece CSS "order" degerlerini
+    // ayarliyoruz. Boylece butonlarin kendisine, olaylarina ya da form
+    // mantigina hic dokunmuyoruz; yalnizca gorsel siralari degisiyor.
+    //
+    // Savunmaci yazildi: aradigi elemanlari bulamazsa HICBIR SEY yapmiyor.
+    // Sayfanin yapisi degisirse tek sonuc, siralamanin eski haline donmesi
+    // olur — giris yine calisir.
+    private static let reorderLoginFormScript = """
+    (function () {
+      if (!location.hostname.endsWith('claude.ai')) return;
+
+      function reorder() {
+        var buttons = Array.prototype.slice.call(document.querySelectorAll('button'));
+        var google = buttons.filter(function (b) {
+          return /continue with google/i.test(b.textContent || '');
+        })[0];
+        var email = document.querySelector('input[type="email"], input[name="email"]');
+        if (!google || !email) return false;
+
+        // Ikisini birden iceren en yakin kapsayiciyi bul
+        var box = google;
+        while (box && !box.contains(email)) box = box.parentElement;
+        if (!box) return false;
+        if (getComputedStyle(box).display.indexOf('flex') === -1) return false;
+
+        Array.prototype.forEach.call(box.children, function (child) {
+          // e-posta bolumu basa, Google en sona, aradaki "or" ortada
+          child.style.order = child.contains(email) ? '0' : (child === google ? '2' : '1');
+        });
+        return true;
+      }
+
+      // Sayfa bir SPA: form, betik calistiktan sonra olusabilir. Bu yuzden
+      // once bir deniyoruz, olmazsa DOM'u kisa bir sure izliyoruz.
+      if (reorder()) return;
+      var observer = new MutationObserver(function () {
+        if (reorder()) observer.disconnect();
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      setTimeout(function () { observer.disconnect(); }, 15000);
+    })();
+    """
 
     private func makeHintLabel() -> NSTextField {
         // wrappingLabelWithString = secilemeyen, satir kaydiran bir etiket
