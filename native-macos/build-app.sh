@@ -29,6 +29,7 @@ rm -rf "$APP_DIR"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
 cp ".build/release/$APP_NAME" "$CONTENTS/MacOS/$APP_NAME"
+cp "Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 
 # LSUIElement = "bu uygulamanin Dock simgesi ve menu cubugu menusu olmasin,
 # sadece arka planda calissin". Menu cubugu uygulamalarinin olmazsa olmazi.
@@ -42,6 +43,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundleExecutable</key>          <string>$APP_NAME</string>
     <key>CFBundleIdentifier</key>          <string>$BUNDLE_ID</string>
     <key>CFBundleName</key>                <string>Claude Usage</string>
+    <key>CFBundleIconFile</key>            <string>AppIcon</string>
     <key>CFBundlePackageType</key>         <string>APPL</string>
     <key>CFBundleShortVersionString</key>  <string>$VERSION</string>
     <key>CFBundleVersion</key>             <string>$VERSION</string>
