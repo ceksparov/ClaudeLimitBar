@@ -52,6 +52,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Menü açıkken menüyü yeniden kurarsak kullanıcının elinin altında
     // titreşir/kapanır. Bu bayrak sayesinde açıkken çizimi erteliyoruz.
     private var menuIsOpen = false
+
+    // "Start at Login" gibi kullanıcının BİZZAT az önce tıkladığı bir menü
+    // öğesinden hemen sonra çizimi güncellemek istediğimizde bunu true
+    // yapıyoruz — AppKit'in "menü kapandı" ile "aksiyon çalıştı" olaylarını
+    // hangi sırayla gönderdiği garanti olmadığından, menuIsOpen hâlâ true
+    // görünüp güncellemeyi sessizce atlayabiliyordu; kullanıcı tiki
+    // işaretliyor ama menüde bir sonraki periyodik yenilemeye kadar
+    // görünmüyordu.
+    private var bypassMenuOpenGuardOnce = false
+
+    private func shouldSkipRedraw() -> Bool {
+        if bypassMenuOpenGuardOnce {
+            bypassMenuOpenGuardOnce = false
+            return false
+        }
+        return menuIsOpen
+    }
     // API çağrısı başarısız olup yerel dosyaya düştüysek, sebebini menüde
     // göstermek için saklıyoruz.
     private var apiError: Error?
@@ -309,7 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
 
         // Kullanıcı tam o an menüyü açmışsa, altından değiştirmiyoruz.
-        guard !menuIsOpen else { return }
+        guard !shouldSkipRedraw() else { return }
 
         // NSMenu = tıklayınca açılan dropdown'ın kendisi. Her satır bir
         // NSMenuItem.
@@ -357,7 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Sunucuya ulaştık ama hiçbir limit bilgisi gelmedi.
     private func renderNoData() {
         statusItem.button?.attributedTitle = attributed(" –", color: .disabledControlTextColor)
-        guard !menuIsOpen else { return }
+        guard !shouldSkipRedraw() else { return }
 
         let menu = NSMenu()
         menu.delegate = self
@@ -397,7 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         statusItem.button?.attributedTitle = attributed(" N/A", color: .disabledControlTextColor)
-        guard !menuIsOpen else { return }
+        guard !shouldSkipRedraw() else { return }
 
         let menu = NSMenu()
         menu.delegate = self
@@ -417,7 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // durumu — o yüzden ayrı ve sakin bir ekran gösteriyoruz.
     private func renderSignedOut() {
         statusItem.button?.attributedTitle = attributed(" –", color: .disabledControlTextColor)
-        guard !menuIsOpen else { return }
+        guard !shouldSkipRedraw() else { return }
 
         let menu = NSMenu()
         menu.delegate = self
@@ -614,6 +631,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             log("start at login failed: \(error.localizedDescription)")
             startAtLoginError = "Could not change — add it in System Settings › General › Login Items"
         }
+        // Kullanıcı bu tike BİZZAT az önce tıkladı — menuIsOpen bayrağı
+        // yüzünden güncellemenin sessizce atlanmasını istemiyoruz.
+        bypassMenuOpenGuardOnce = true
         redraw()  // sadece menüdeki tik işaretini güncelle — ağa gitmeye gerek yok
     }
 
