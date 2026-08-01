@@ -120,9 +120,23 @@ enum UsageAPI {
         // kontrole takilmiyor (olculdu; takilan curl idi) — yani bu bilinen
         // bir arizanin duzeltmesi degil, ileride takilirsa oturumu yok
         // etmemek icin konulmus bir koruma.
-        let isJSON = (http.value(forHTTPHeaderField: "Content-Type") ?? "").contains("json")
+        //
+        // Onceki surumde bu ayrimi "Content-Type json degil" diye TERSTEN
+        // (negatif) kuruyorduk — yani "json degilse Cloudflare'dir" diye
+        // varsayiyorduk. Sorun su: Cloudflare (ya da onundeki baska bir
+        // WAF/CDN katmani) bir gun engelleme sayfasini "application/json"
+        // Content-Type'iyla donerse (bazi saglayicilarda XHR istekleri icin
+        // boyle olur), bu kontrol onu YANLISLIKLA gercek bir "oturum bitti"
+        // yaniti sanir ve gecerli anahtari siler. Bunun yerine Cloudflare'in
+        // gercekten biraktigi izlere (govde metni ya da kendi basligi)
+        // POZITIF olarak bakiyoruz — daha dar ama daha dogru bir kontrol.
+        let bodyText = String(data: data, encoding: .utf8) ?? ""
+        let looksLikeCloudflareChallenge =
+            http.value(forHTTPHeaderField: "cf-mitigated") != nil
+            || bodyText.contains("Just a moment")
+            || bodyText.contains("cf-chl")
 
-        if !isJSON && (http.statusCode == 401 || http.statusCode == 403) {
+        if looksLikeCloudflareChallenge && (http.statusCode == 401 || http.statusCode == 403) {
             throw APIError.blocked
         }
 
