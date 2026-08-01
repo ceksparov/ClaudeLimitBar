@@ -106,7 +106,12 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
         // Once "hangi siteler icin veri tutuluyor" listesini aliyoruz, sonra
         // sadece claude.ai'ye ait olanlari secip siliyoruz.
         store.fetchDataRecords(ofTypes: types) { records in
-            let claudeRecords = records.filter { $0.displayName.contains("claude.ai") }
+            // "contains" yerine tam eslesme/alt-domain ariyoruz — yoksa adinda
+            // tesaduefen "claude.ai" alt dizisi gecen alakasiz bir domain de
+            // (ör. "notclaude.ai.example.com") burada silinebilirdi.
+            let claudeRecords = records.filter {
+                $0.displayName == "claude.ai" || $0.displayName.hasSuffix(".claude.ai")
+            }
 
             store.removeData(ofTypes: types, for: claudeRecords) {
                 log("cleared claude.ai web data (\(claudeRecords.count) records)")
@@ -206,7 +211,10 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
     // olur — giris yine calisir.
     private static let reorderLoginFormScript = """
     (function () {
-      if (!location.hostname.endsWith('claude.ai')) return;
+      // Dikkat: "endsWith" tek basina yanlis olurdu — "evilclaude.ai" gibi
+      // bir domain de bu kontrolu gecerdi. Tam eslesme ya da gercek bir
+      // alt-domain (onunde nokta olan) araniyor.
+      if (location.hostname !== 'claude.ai' && !location.hostname.endsWith('.claude.ai')) return;
 
       function reorder() {
         var buttons = Array.prototype.slice.call(document.querySelectorAll('button'));
