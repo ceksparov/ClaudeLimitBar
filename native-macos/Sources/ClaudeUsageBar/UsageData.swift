@@ -149,14 +149,33 @@ func formatDuration(_ ms: Double) -> String {
     return "\(mins)m"
 }
 
+// "4d 6h" gibi bir sürenin yanına, hangi gün ve saatte sıfırlanacağını da
+// ekliyoruz — "EEE HH:mm" = "Sat 14:32" gibi kısa gün adı + 24 saatlik saat.
+private func weekdayClock(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "EEE HH:mm"
+    return formatter.string(from: date)
+}
+
 // Menüde "Sıfırlanma: ..." satırında gösterilecek metni üretir. Veri canlı
 // API'den geldiyse sunucunun verdiği kesin zamanı yazıyoruz; yerel dosyadan
 // geldiyse kendi tahminimiz olduğunu kullanıcıya açıkça belirtiyoruz.
 func resetLabel(percent: Int, resetAt: Date?, isEstimate: Bool, now: Date) -> String {
     // "if let resetAt" = "resetAt gerçekten bir değer içeriyorsa, onu aç ve kullan"
     if let resetAt {
-        let text = formatDuration(resetAt.timeIntervalSince(now) * 1000)
-        return isEstimate ? "\(text) (estimated)" : text
+        let interval = resetAt.timeIntervalSince(now)
+        let text = formatDuration(interval * 1000)
+
+        // Gün ölçeğindeki (haftalık) pencerede kullanıcı hangi gün/saatte
+        // sıfırlanacağını bilmek işe yarar; birkaç saatlik oturum
+        // penceresinde bu zaten "bugün" demek olduğu için gereksiz
+        // kalabalık olurdu — o yüzden yalnızca ~1 günden uzun kalanlarda ekliyoruz.
+        var notes: [String] = []
+        if interval > 20 * 60 * 60 { notes.append(weekdayClock(resetAt)) }
+        if isEstimate { notes.append("estimated") }
+
+        guard !notes.isEmpty else { return text }
+        return "\(text) (\(notes.joined(separator: ", ")))"
     }
     if percent == 0 { return "no usage yet" }
     return "unknown"
