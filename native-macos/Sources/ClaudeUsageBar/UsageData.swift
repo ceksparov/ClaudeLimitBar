@@ -150,10 +150,14 @@ func formatDuration(_ ms: Double) -> String {
 }
 
 // "4d 6h" gibi bir sürenin yanına, hangi gün ve saatte sıfırlanacağını da
-// ekliyoruz — "EEE HH:mm" = "Sat 14:32" gibi kısa gün adı + 24 saatlik saat.
+// ekliyoruz — "EEE h:mm a" = "Thu 3:00 AM" gibi kısa gün adı + Claude'un
+// masaüstü uygulamasıyla aynı 12 saatlik (AM/PM) saat gösterimi.
 private func weekdayClock(_ date: Date) -> String {
     let formatter = DateFormatter()
-    formatter.dateFormat = "EEE HH:mm"
+    // Arayüzün geri kalanı gibi bunu da sabit İngilizce tutuyoruz — sistem
+    // dili Türkçe olsaydı "a" sembolü AM/PM yerine ÖÖ/ÖS basardı.
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "EEE h:mm a"
     return formatter.string(from: date)
 }
 
