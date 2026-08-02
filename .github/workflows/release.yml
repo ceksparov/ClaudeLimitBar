@@ -1,0 +1,35 @@
+name: Release
+
+# Push a tag like "v0.2.0" and this builds the app, zips it, and publishes
+# a GitHub Release with the zip attached — no manual build-app.sh/gh
+# release steps needed on your machine.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: native-macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: swift test
+
+      - run: ./build-app.sh --zip
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            *.zip \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            --prerelease
