@@ -14,7 +14,7 @@ import Security
 enum SessionStore {
     // Keychain'de kayitlar "service + account" ikilisiyle adreslenir;
     // bunlar bizim kaydimizi baskalarininkinden ayiran etiketler.
-    private static let service = "ClaudeUsageBar"
+    private static let service = "ClaudeLimitBar"
     private static let account = "sessionKey"
 
     // Keychain API'si Objective-C'den de eski, C tabanli bir arayuz

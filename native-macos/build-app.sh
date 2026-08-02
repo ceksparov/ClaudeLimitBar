@@ -1,21 +1,21 @@
 #!/bin/bash
-# ClaudeUsageBar.app paketini olusturur.
+# ClaudeLimitBar.app paketini olusturur.
 #
 # SwiftPM ciplak bir calistirilabilir uretir; macOS'un bunu "uygulama" olarak
 # gormesi icin belirli bir klasor yapisi ve Info.plist gerekir. Bu betik onu
 # kuruyor.
 #
-# Kullanim:  ./build-app.sh          -> ClaudeUsageBar.app uretir
+# Kullanim:  ./build-app.sh          -> ClaudeLimitBar.app uretir
 #            ./build-app.sh --zip    -> ayrica dagitima hazir .zip uretir
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="ClaudeUsageBar"
+APP_NAME="ClaudeLimitBar"
 # Bundle identifier, macOS'un uygulamani benzersiz olarak tanidigi kimlik.
 # Yayinlarken kendi alan adin/GitHub kullanici adinla degistir.
-BUNDLE_ID="io.github.claudeusagebar"
+BUNDLE_ID="io.github.claudelimitbar"
 VERSION="1.0.0"
 
 APP_DIR="$APP_NAME.app"
@@ -42,7 +42,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 <dict>
     <key>CFBundleExecutable</key>          <string>$APP_NAME</string>
     <key>CFBundleIdentifier</key>          <string>$BUNDLE_ID</string>
-    <key>CFBundleName</key>                <string>Claude Usage</string>
+    <key>CFBundleName</key>                <string>Claude Limit Bar</string>
     <key>CFBundleIconFile</key>            <string>AppIcon</string>
     <key>CFBundlePackageType</key>         <string>APPL</string>
     <key>CFBundleShortVersionString</key>  <string>$VERSION</string>

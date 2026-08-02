@@ -1,4 +1,4 @@
-# ClaudeUsageBar
+# ClaudeLimitBar
 
 A macOS menu bar app that shows your Claude usage limits (current session and
 weekly) at a glance — no need to open claude.ai to check.
@@ -12,7 +12,7 @@ Not affiliated with or endorsed by Anthropic.
 ## Install
 
 1. Download the latest `.zip` from [Releases](../../releases), unzip it, and
-   drag `ClaudeUsageBar.app` to `/Applications`.
+   drag `ClaudeLimitBar.app` to `/Applications`.
 2. **First launch**: macOS will likely warn that the developer can't be
    verified (this app isn't notarized by Apple). Either:
    - Control-click the app → **Open**, or
@@ -26,7 +26,7 @@ Not affiliated with or endorsed by Anthropic.
 
 ```bash
 cd native-macos
-./build-app.sh        # produces ClaudeUsageBar.app
+./build-app.sh        # produces ClaudeLimitBar.app
 ./build-app.sh --zip   # also produces a distributable .zip
 ```
 

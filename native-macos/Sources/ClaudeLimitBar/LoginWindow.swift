@@ -11,13 +11,13 @@ import WebKit
 // yapamiyorum" dediginde elimizde hicbir veri olmazdi. os_log ise sistemin
 // log deposuna yazar; kullanici Console.app'ten ya da su komutla gorebilir:
 //
-//   log show --predicate 'subsystem == "io.github.claudeusagebar"' --last 1h
+//   log show --predicate 'subsystem == "io.github.claudelimitbar"' --last 1h
 //
 // privacy: .public — log satirlarinda gizli deger YOK (URL'lerin yalnizca
 // host+path kismi yaziliyor, oturum anahtari hicbir zaman loglanmiyor).
 // Bunu belirtmezsek sistem metni <private> diye maskeler ve log ise yaramaz.
 private let appLog = Logger(
-    subsystem: Bundle.main.bundleIdentifier ?? "ClaudeUsageBar", category: "app"
+    subsystem: Bundle.main.bundleIdentifier ?? "ClaudeLimitBar", category: "app"
 )
 
 func log(_ message: String) {
