@@ -5,6 +5,7 @@ let package = Package(
     name: "ClaudeLimitBar",
     platforms: [.macOS(.v13)],
     targets: [
-        .executableTarget(name: "ClaudeLimitBar", path: "Sources/ClaudeLimitBar")
+        .executableTarget(name: "ClaudeLimitBar", path: "Sources/ClaudeLimitBar"),
+        .testTarget(name: "ClaudeLimitBarTests", dependencies: ["ClaudeLimitBar"], path: "Tests/ClaudeLimitBarTests"),
     ]
 )
