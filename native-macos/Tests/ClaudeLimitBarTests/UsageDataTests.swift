@@ -584,3 +584,34 @@ final class DayLabelTests: XCTestCase {
         XCTAssertTrue(labels.allSatisfy { Int($0) != nil }, "expected day numbers, got \(labels)")
     }
 }
+
+final class RecentActivityScenarioTests: XCTestCase {
+    private let start = Date(timeIntervalSince1970: 2_000_000)
+
+    // Replays a real session at the live poll rate: a burst, an idle spell,
+    // then a second burst. Both bursts fall inside the ceiling, so the window
+    // reaches back to just before the first one and reports the pair
+    // together — the idle time between them is part of the span, not a reason
+    // to forget the earlier usage.
+    func testTwoBurstsSeparatedByIdleAreReportedTogether() {
+        var tracker = RecentActivityTracker()
+
+        func percent(atSecond second: Double) -> Int {
+            switch second {
+            case ..<0: return 30                                        // steady before it begins
+            case 0...300: return 30 + Int((12 * second / 300).rounded())  // 5 min spending 12%
+            case 300...600: return 42                                   // 5 min idle
+            default: return 42 + Int((6 * (second - 600) / 180).rounded())  // 3 min spending 6%
+            }
+        }
+
+        for step in stride(from: -600.0, through: 780.0, by: 20) {
+            tracker.record(
+                percent: percent(atSecond: step), at: start.addingTimeInterval(step), source: .api
+            )
+        }
+
+        let now = start.addingTimeInterval(780)
+        XCTAssertEqual(tracker.activity(now: now), .measured(deltaPercent: 18, elapsedMinutes: 13))
+    }
+}
