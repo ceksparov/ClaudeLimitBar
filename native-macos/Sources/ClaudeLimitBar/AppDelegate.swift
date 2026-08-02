@@ -518,7 +518,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case .measured(let delta, let minutes):
                     detail += " · +\(delta)% last \(minutes) min"
                 case .unknown:
-                    detail += " · recent usage unknown"
+                    // Reached only just after a launch, or when the window
+                    // reset moments ago. Saying "unknown" reads like a
+                    // failure; this is a wait, and it ends on its own.
+                    detail += " · measuring recent usage"
                 }
             case "sevenDay":
                 if let today = todayUsage(now: now) {

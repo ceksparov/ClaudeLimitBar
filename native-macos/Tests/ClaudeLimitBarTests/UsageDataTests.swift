@@ -136,8 +136,19 @@ final class RecentActivityTrackerTests: XCTestCase {
         return tracker
     }
 
-    func testUnknownBeforeEnoughHistoryExists() {
+    // A rise is something we watched happen, so there's no reason to sit on
+    // it until the floor's worth of history exists — it reports straight
+    // away, at the floor's label.
+    func testARiseIsReportedBeforeTheFloorHasElapsed() {
         let tracker = self.tracker(percentTimeline: [(3, 10), (0, 12)])
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 2, elapsedMinutes: 5))
+    }
+
+    // Silence is different: a minute after launch we have no idea whether
+    // the four minutes before it were busy, and "+0%" would assert they
+    // weren't.
+    func testSilenceIsNotReportedAsZeroUntilTheFloorHasElapsed() {
+        let tracker = self.tracker(percentTimeline: [(3, 10), (0, 10)])
         XCTAssertEqual(tracker.activity(now: start), .unknown)
     }
 

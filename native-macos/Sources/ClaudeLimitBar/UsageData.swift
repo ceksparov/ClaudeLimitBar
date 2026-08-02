@@ -520,7 +520,6 @@ struct RecentActivityTracker {
         guard let currentPercent = samples.last?.percent, let oldest = samples.first else {
             return .unknown
         }
-        guard now.timeIntervalSince(oldest.date) >= minWindow else { return .unknown }
 
         // Look no further back than the ceiling; if we have less history than
         // that, however much we do have is the honest limit.
@@ -533,9 +532,13 @@ struct RecentActivityTracker {
         // negative usage, and there's no honest figure to report for it.
         guard delta >= 0 else { return .unknown }
 
-        // Flat across the whole horizon: nothing to reach back for, so the
-        // answer is the most current one the floor can give.
+        // Flat across everything we've seen. Reporting that as zero requires
+        // having watched for the full floor first: a minute after launch we
+        // have no idea whether the four minutes before it were busy, and
+        // "+0%" would assert they weren't. Seeing a rise needs no such wait —
+        // that is something we watched happen.
         guard delta > 0 else {
+            guard now.timeIntervalSince(oldest.date) >= minWindow else { return .unknown }
             return .measured(deltaPercent: 0, elapsedMinutes: Int(minWindow / 60))
         }
 
