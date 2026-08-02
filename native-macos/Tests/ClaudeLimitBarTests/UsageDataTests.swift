@@ -136,20 +136,45 @@ final class RecentActivityTrackerTests: XCTestCase {
         return tracker
     }
 
-    // A rise is something we watched happen, so there's no reason to sit on
-    // it until the floor's worth of history exists — it reports straight
-    // away, at the floor's label.
-    func testARiseIsReportedBeforeTheFloorHasElapsed() {
-        let tracker = self.tracker(percentTimeline: [(3, 10), (0, 12)])
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 2, elapsedMinutes: 5))
+    // Nothing to describe in the first seconds, so the panel stays quiet.
+    func testSaysNothingUntilThereIsAMinuteToDescribe() {
+        let tracker = self.tracker(percentTimeline: [(0.5, 10), (0, 12)])
+        XCTAssertEqual(tracker.activity(now: start), .unknown)
     }
 
-    // Silence is different: a minute after launch we have no idea whether
-    // the four minutes before it were busy, and "+0%" would assert they
-    // weren't.
-    func testSilenceIsNotReportedAsZeroUntilTheFloorHasElapsed() {
+    // Past a minute a figure appears, labelled with the span actually
+    // watched — claiming the five-minute floor here would fold in three
+    // minutes nobody observed.
+    func testReportsTheSpanActuallyWatchedBeforeTheFloorIsEarned() {
+        let tracker = self.tracker(percentTimeline: [(3, 10), (0, 12)])
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 2, elapsedMinutes: 3))
+    }
+
+    // Same for silence: three minutes of watching nothing happen is a real
+    // answer, just a three-minute one.
+    func testSilenceIsReportedOverTheSpanWatched() {
         let tracker = self.tracker(percentTimeline: [(3, 10), (0, 10)])
-        XCTAssertEqual(tracker.activity(now: start), .unknown)
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsedMinutes: 3))
+    }
+
+    // A drop is the 5-hour window resetting. The readings before it belong
+    // to a window that no longer exists; holding onto them left every
+    // comparison negative, and so unreportable, for most of an hour.
+    func testStartsFreshAfterTheWindowResetsInsteadOfGoingQuiet() {
+        var tracker = RecentActivityTracker()
+        for minutesAgo in stride(from: 30, through: 11, by: -1) {
+            tracker.record(
+                percent: 90, at: start.addingTimeInterval(-Double(minutesAgo) * 60), source: .api
+            )
+        }
+        // The window resets, then usage starts again in the new one.
+        for minutesAgo in stride(from: 10, through: 0, by: -1) {
+            tracker.record(
+                percent: 10 - minutesAgo, at: start.addingTimeInterval(-Double(minutesAgo) * 60),
+                source: .api
+            )
+        }
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 10, elapsedMinutes: 10))
     }
 
     func testUsesTheFiveMinuteFloorWhenThatIsAllWeHave() {

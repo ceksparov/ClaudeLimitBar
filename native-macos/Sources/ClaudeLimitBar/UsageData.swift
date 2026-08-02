@@ -508,6 +508,14 @@ struct RecentActivityTracker {
     // during an outage and back again would read as a drop and then a spike
     // that never happened. On a source change we start over instead.
     mutating func record(percent: Int, at date: Date, source: UsageSnapshot.Source) {
+        // A drop means the 5-hour window reset. Readings from the window that
+        // just ended can't be compared against the new one, and keeping them
+        // would leave every comparison negative — and so unreportable — until
+        // they aged out, which is most of an hour of saying nothing after
+        // every reset. The new window starts here.
+        if let previous = samples.last?.percent, percent < previous {
+            samples.removeAll()
+        }
         if source != recordedSource {
             recordedSource = source
             samples.removeAll()
@@ -534,6 +542,14 @@ struct RecentActivityTracker {
             return .unknown
         }
 
+        // A minute is the least that can be described; below it there isn't a
+        // span worth naming. Waiting for the full floor instead would mean
+        // saying nothing for five minutes after every launch and every window
+        // reset, which is most of what there is to say at exactly the moment
+        // someone opens the menu to look.
+        let availableSpan = now.timeIntervalSince(oldest.date)
+        guard availableSpan >= 60 else { return .unknown }
+
         // Look no further back than the ceiling; if we have less history than
         // that, however much we do have is the honest limit.
         let horizon = now.addingTimeInterval(-maxWindow)
@@ -541,19 +557,15 @@ struct RecentActivityTracker {
         guard let earliest = inRange.first else { return .unknown }
 
         let delta = currentPercent - earliest.percent
-        // A drop means the 5-hour window reset in between; that isn't
-        // negative usage, and there's no honest figure to report for it.
         guard delta >= 0 else { return .unknown }
 
-        // Flat across everything we've seen. Reporting that as zero requires
-        // having watched for the full floor first: a minute after launch we
-        // have no idea whether the four minutes before it were busy, and
-        // "+0%" would assert they weren't. Seeing a rise needs no such wait —
-        // that is something we watched happen.
-        guard delta > 0 else {
-            guard now.timeIntervalSince(oldest.date) >= minWindow else { return .unknown }
-            return .measured(deltaPercent: 0, elapsedMinutes: Int(minWindow / 60))
-        }
+        // The floor is a claim about coverage, so it can only be made once
+        // we've actually watched that long: two minutes in, the answer is
+        // "last 2 min", not "last 5 min" with three minutes we never saw
+        // folded into it.
+        let floorMinutes = max(1, Int(min(minWindow, availableSpan) / 60))
+
+        guard delta > 0 else { return .measured(deltaPercent: 0, elapsedMinutes: floorMinutes) }
 
         // The window ends at the last reading still sitting at the pre-rise
         // level — the moment right before usage started climbing. That's what
@@ -564,7 +576,7 @@ struct RecentActivityTracker {
 
         // Everything older than the baseline sits at the same level, so
         // widening to the floor cannot change the figure — only its label.
-        return .measured(deltaPercent: delta, elapsedMinutes: max(Int(minWindow / 60), elapsed))
+        return .measured(deltaPercent: delta, elapsedMinutes: max(floorMinutes, elapsed))
     }
 }
 
