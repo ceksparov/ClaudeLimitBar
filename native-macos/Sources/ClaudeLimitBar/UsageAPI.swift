@@ -11,6 +11,7 @@ enum APIError: LocalizedError {
     case notSignedIn
     case unauthorized
     case badStatus(Int)
+    case invalidURL
     case noOrganization
     // The server said "you're requesting too often". retryAfter is the
     // server's suggested wait time (Retry-After header); nil if it didn't give one.
@@ -23,6 +24,7 @@ enum APIError: LocalizedError {
         case .notSignedIn: return "Not signed in"
         case .unauthorized: return "Session expired — sign in again"
         case .badStatus(let code): return "Server returned \(code)"
+        case .invalidURL: return "Server returned an unusable organization id"
         case .noOrganization: return "No organization found for this account"
         case .rateLimited: return "Rate limited — backing off"
         case .blocked: return "Temporarily blocked by the site's bot check"
@@ -72,7 +74,12 @@ enum UsageAPI {
     // MARK: - Generic request helper
 
     private static func get<T: Decodable>(_ path: String, sessionKey: String) async throws -> T {
-        var request = URLRequest(url: URL(string: host + path)!)
+        // The organization id in `path` comes from the server, so this
+        // string isn't fully ours to vouch for. Force-unwrapping it would
+        // turn a malformed id into a crash; failing the request instead
+        // leaves the app running and falling back to the local file.
+        guard let url = URL(string: host + path) else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
         request.setValue("sessionKey=\(sessionKey)", forHTTPHeaderField: "Cookie")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         // The server can behave differently for requests that don't look
@@ -114,18 +121,23 @@ enum UsageAPI {
         // for a genuine "session expired" response and delete a valid key.
         // Instead we look POSITIVELY for actual signs Cloudflare left behind
         // (body text or its own header) — narrower, but more accurate.
-        let bodyText = String(data: data, encoding: .utf8) ?? ""
-        let looksLikeCloudflareChallenge =
-            http.value(forHTTPHeaderField: "cf-mitigated") != nil
-            || bodyText.contains("Just a moment")
-            || bodyText.contains("cf-chl")
+        //
+        // Only worth deciding on the responses this could apply to: every
+        // other status ends up somewhere that doesn't care, and decoding
+        // each successful body to a string just to discard the answer is
+        // work we do every 20 seconds for nothing.
+        if http.statusCode == 401 || http.statusCode == 403 {
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            let looksLikeCloudflareChallenge =
+                http.value(forHTTPHeaderField: "cf-mitigated") != nil
+                || bodyText.contains("Just a moment")
+                || bodyText.contains("cf-chl")
 
-        if looksLikeCloudflareChallenge && (http.statusCode == 401 || http.statusCode == 403) {
-            throw APIError.blocked
+            if looksLikeCloudflareChallenge { throw APIError.blocked }
+
+            // Only the server's ACTUAL response counts as an auth failure.
+            throw APIError.unauthorized
         }
-
-        // Only the server's ACTUAL response counts as an auth failure.
-        if http.statusCode == 401 || http.statusCode == 403 { throw APIError.unauthorized }
         guard (200..<300).contains(http.statusCode) else { throw APIError.badStatus(http.statusCode) }
 
         let decoder = JSONDecoder()
@@ -248,6 +260,7 @@ enum UsageAPI {
         SessionStore.setCachedResetAt(id, resetAt)
 
         return UsageSnapshot.Window(
+            id: id,
             label: label,
             percent: Int(raw.utilization.rounded()),
             resetAt: resetAt,

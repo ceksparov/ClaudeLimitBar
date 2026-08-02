@@ -13,6 +13,11 @@ struct UsageSnapshot {
     }
 
     struct Window {
+        // "fiveHour" / "sevenDay". Which window this is has to be identified
+        // by name rather than by position in the array: an account with no
+        // 5-hour limit gets that entry dropped (see UsageAPI.snapshot), so
+        // the weekly window would silently slide into first place.
+        let id: String
         let label: String       // name shown in the menu, e.g. "Current session"
         let percent: Int        // usage percentage
         let resetAt: Date?      // reset moment; nil if unknown

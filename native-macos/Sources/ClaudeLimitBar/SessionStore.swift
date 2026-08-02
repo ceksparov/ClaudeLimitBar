@@ -82,6 +82,26 @@ enum SessionStore {
         set { UserDefaults.standard.set(newValue, forKey: "preferredOrgId") }
     }
 
+    // Our own day-by-day record of weekly-quota usage (see UsageLedger).
+    //
+    // It has to outlive the process — its whole purpose is to remember days
+    // this app watched but the desktop app's history file never saw. Stored
+    // as JSON rather than as loose keys because it's a growing structure, not
+    // a fixed handful of values. Nothing in it is sensitive: dates and
+    // percentages, no account identifiers.
+    static var ledger: UsageLedger {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: "usageLedger"),
+                let decoded = try? JSONDecoder().decode(UsageLedger.self, from: data)
+            else { return UsageLedger() }
+            return decoded
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            UserDefaults.standard.set(data, forKey: "usageLedger")
+        }
+    }
+
     // Caches the EXACT reset times we learned from the API.
     //
     // Why: a reset time is an absolute moment ("July 31, 7:10 PM"). Once
@@ -96,12 +116,14 @@ enum SessionStore {
         return Date(timeIntervalSince1970: seconds)
     }
 
-    // Called when the viewed account or organization changes. Cached times
-    // belong to the PREVIOUS organization; if we don't clear them, we might
-    // show another organization's reset time as "exact" at a moment when
-    // the API can't be reached.
-    static func clearResetCache() {
+    // Called when the viewed account or organization changes. Everything
+    // cached here describes the PREVIOUS organization: keeping the reset
+    // times would let us present another organization's figure as "exact"
+    // while the API is unreachable, and keeping the ledger would blend two
+    // different accounts' usage into the same days.
+    static func clearAccountCaches() {
         for id in ["fiveHour", "sevenDay"] { setCachedResetAt(id, nil) }
+        UserDefaults.standard.removeObject(forKey: "usageLedger")
     }
 
     static func setCachedResetAt(_ id: String, _ date: Date?) {

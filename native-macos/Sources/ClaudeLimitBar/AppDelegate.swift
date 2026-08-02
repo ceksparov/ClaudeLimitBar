@@ -109,6 +109,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // just to refresh the "Start at Login" checkmark).
     private var lastSnapshot: UsageSnapshot?
 
+    // Answers "how much has the session percentage grown recently" for the
+    // menu (see RecentActivityTracker in UsageData.swift).
+    private var recentActivityTracker = RecentActivityTracker()
+
     // AppKit calls this automatically once NSApplication has finished
     // launching (similar to a "DOMContentLoaded"-style "I'm ready now" moment).
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -286,6 +290,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // MARK: - Today's usage
+
+    // Writes this reading into our own record. Called on every observation of
+    // the weekly figure, whatever the source, so the ledger keeps covering
+    // days the desktop app's history file never saw.
+    private func recordInLedger(weeklyPercent: Int, now: Date, source: UsageSnapshot.Source) {
+        let updated = recording(
+            SessionStore.ledger, weeklyPercent: weeklyPercent, at: now, source: source
+        )
+        // A fortnight is well past anything the chart can show, and keeps the
+        // stored record from growing forever.
+        SessionStore.ledger = pruned(
+            updated, before: Calendar.current.date(byAdding: .day, value: -14, to: now) ?? now
+        )
+    }
+
+    // Combines the two records of the same thing, day by day.
+    //
+    // Ours wins for days it watched from the start, since it samples every 20
+    // seconds and keeps going whether or not the desktop app is open. For
+    // every other day the desktop app's file is the better bet: it may have
+    // been watching while this app wasn't, and its figure for a day this app
+    // only caught the tail of is the more complete one.
+    private func mergedDays(weekStart: Date, now: Date) -> [DailyUsage] {
+        let ledger = SessionStore.ledger
+        let fromFile = (try? loadHistory()).map {
+            dailyUsage(samples: $0, weekStart: weekStart, now: now)
+        } ?? []
+
+        return fromFile.map { day in
+            guard let mine = ledger.days[ledgerDayKey(day.day)] else { return day }
+            if mine.fromDayStart || day.percent == nil {
+                return DailyUsage(day: day.day, percent: mine.consumed)
+            }
+            return day
+        }
+    }
+
+    // How much of the weekly quota today accounts for, plus the moment that
+    // figure actually starts from — midnight when a source covered the whole
+    // day, otherwise when we first looked, which the menu discloses instead
+    // of passing a partial number off as a full day.
+    private func todayUsage(now: Date) -> (percent: Int, since: Date)? {
+        let startOfToday = Calendar.current.startOfDay(for: now)
+
+        if let samples = try? loadHistory(), let total = usageToday(samples: samples, now: now) {
+            return (total, startOfToday)
+        }
+        guard let today = SessionStore.ledger.days[ledgerDayKey(now)] else { return nil }
+        return (today.consumed, today.fromDayStart ? startOfToday : today.firstSeenAt)
+    }
+
     // MARK: - Drawing
 
     // The actual "what goes in the menu bar, what's in the dropdown" logic lives here.
@@ -304,7 +360,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let age = now.timeIntervalSince(snapshot.capturedAt) * 1000
         // Live API data is fresh by definition; staleness only makes sense for the local file.
         let stale = snapshot.source == .localFile && age > staleMs
-        let headline = snapshot.windows.first?.percent ?? 0
+        // The session window is what the menu bar shows and what "recent
+        // activity" tracks. Accounts without one fall back to whatever
+        // window they do have, so the icon still shows something.
+        let sessionWindow = snapshot.windows.first { $0.id == "fiveHour" }
+        let headline = (sessionWindow ?? snapshot.windows.first)?.percent ?? 0
+        if let sessionWindow {
+            recentActivityTracker.record(percent: sessionWindow.percent, at: now, source: snapshot.source)
+        }
+        if let weekly = snapshot.windows.first(where: { $0.id == "sevenDay" }) {
+            recordInLedger(weeklyPercent: weekly.percent, now: now, source: snapshot.source)
+        }
 
         // The "⚡ 14%" text in the menu bar — this can update even while
         // the menu is open, since it isn't part of the menu itself.
@@ -318,18 +384,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // NSMenu is the dropdown itself; each row is an NSMenuItem.
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(withTitle: "Claude Usage Limits", action: nil, keyEquivalent: "")
-        menu.addItem(.separator())
 
-        for window in snapshot.windows {
-            let reset = resetLabel(
-                percent: window.percent, resetAt: window.resetAt,
-                isEstimate: window.resetIsEstimate, now: now
-            )
-
-            addRow(to: menu, "\(window.label): \(window.percent)%", color: colorFor(window.percent))
-            addRow(to: menu, "   Resets: \(reset)", color: grayText, small: true)
-        }
+        // The whole display half of the menu is one drawn view rather than a
+        // column of text rows — see UsagePanelView.
+        let panel = NSMenuItem()
+        panel.view = UsagePanelView(model: panelModel(snapshot: snapshot, now: now))
+        menu.addItem(panel)
 
         menu.addItem(.separator())
         addRow(to: menu, sourceLine(snapshot: snapshot, age: age), color: grayText, small: true)
@@ -433,6 +493,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         appendFooter(to: menu)
         statusItem.menu = menu
+    }
+
+    // Turns a snapshot into everything the drawn panel needs, so the view
+    // itself holds no knowledge of where any of it came from.
+    private func panelModel(snapshot: UsageSnapshot, now: Date) -> UsagePanelModel {
+        let windows = snapshot.windows.map { window in
+            let reset = resetLabel(
+                percent: window.percent, resetAt: window.resetAt,
+                isEstimate: window.resetIsEstimate, now: now
+            )
+
+            // Each window gets the breakdown that suits its timescale: a
+            // few-minute delta for the session window, a since-midnight total
+            // for the weekly one. The reverse of either would be meaningless
+            // — the weekly figure barely moves in 5 minutes, and a session
+            // that resets every 5 hours has no "today".
+            var detail = "Resets \(reset)"
+            switch window.id {
+            case "fiveHour":
+                // Always stated (never just left out) so "no data yet" can't
+                // be mistaken for a measured 0%.
+                switch recentActivityTracker.activity(now: now) {
+                case .measured(let delta, let minutes):
+                    detail += " · +\(delta)% last \(minutes) min"
+                case .unknown:
+                    detail += " · recent usage unknown"
+                }
+            case "sevenDay":
+                if let today = todayUsage(now: now) {
+                    detail += " · \(todayLabel(today, now: now)) today"
+                }
+            default:
+                break
+            }
+
+            return UsagePanelModel.Window(
+                title: window.label, percent: window.percent, detail: detail
+            )
+        }
+
+        // Only the running window is charted: days from the previous one are
+        // quota that's already gone and can't be acted on. The window's start
+        // comes from the server's exact reset time rather than a guess.
+        var days: [UsagePanelModel.Day] = []
+        if let resetAt = snapshot.windows.first(where: { $0.id == "sevenDay" })?.resetAt {
+            let today = Calendar.current.startOfDay(for: now)
+            days = mergedDays(weekStart: resetAt.addingTimeInterval(-7 * 24 * 60 * 60), now: now)
+                .map {
+                    UsagePanelModel.Day(
+                        label: weekdayLabel($0.day), percent: $0.percent, isToday: $0.day == today
+                    )
+                }
+        }
+
+        return UsagePanelModel(
+            windows: windows,
+            days: days.contains { $0.percent != nil } ? days : [],
+            weekTotal: snapshot.windows.first { $0.id == "sevenDay" }?.percent,
+            unrecorded: SessionStore.ledger.unrecorded
+        )
     }
 
     // A small helper so we don't repeat the same three lines (build the
@@ -541,13 +661,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginWindow.present { [weak self] sessionKey in
             SessionStore.save(sessionKey: sessionKey)
             // This may be a different account — don't carry over the previous account's reset times.
-            SessionStore.clearResetCache()
+            SessionStore.clearAccountCaches()
             // This may be a different account — the cached org id/list should now be considered stale.
             SessionStore.orgId = nil
             self?.organizations = []
             self?.organizationsLoadedAt = nil
             self?.needsReauth = false
             self?.pauseUntil = nil
+            // Samples collected before this belong to whoever was signed in
+            // before — comparing across the two would invent activity.
+            self?.recentActivityTracker.reset()
             self?.refresh(force: true)
         }
     }
@@ -562,6 +685,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         apiError = nil
         needsReauth = false  // the user signed out on their own, no warning needed
         lastSnapshot = nil   // don't let stale live data get redrawn again
+        recentActivityTracker.reset()
 
         // Clearing the Keychain isn't enough: WebKit's persistent store
         // still holds the claude.ai session cookie, otherwise "signed out"
@@ -579,8 +703,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // during error recovery, but the user's choice should persist.
         SessionStore.preferredOrgId = uuid
         lastSnapshot = nil  // now looking at a different organization
+        recentActivityTracker.reset()
         // Cached reset times belong to the PREVIOUS organization.
-        SessionStore.clearResetCache()
+        SessionStore.clearAccountCaches()
         refresh(force: true)
     }
 
