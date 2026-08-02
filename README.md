@@ -5,6 +5,23 @@ weekly) at a glance — no need to open claude.ai to check.
 
 Not affiliated with or endorsed by Anthropic.
 
+## What it shows
+
+- **Both limit windows** — the 5-hour session and the weekly one, each with a
+  meter and the exact time it resets.
+- **Recent activity** — how much of the session window the last few minutes
+  cost. The period shown stretches between 5 and 20 minutes to match however
+  long the usage actually spans, so "+4% last 12 min" means it really did take
+  twelve minutes.
+- **Today** — the share of your weekly quota spent since midnight.
+- **This week, by day** — a chart of the running weekly window, one bar per
+  day. Days are measured as a share of the weekly quota, so the bars add up to
+  the weekly figure shown above them.
+
+Where a figure can't be worked out honestly — not enough history yet, or usage
+that appeared while nothing was recording — the app says so rather than
+showing a number it can't stand behind.
+
 ## Requirements
 
 - macOS 13 or later
@@ -44,8 +61,21 @@ cd native-macos
   `~/Library/Application Support/Claude/plan-usage-history.json`, and
   estimates reset times from it.
 
-Your session key is stored only in the macOS Keychain, never logged or
-written to disk in plain text.
+## What it stores
+
+- **Your session key** goes in the macOS Keychain, and nowhere else. It is
+  never logged or written to disk in plain text.
+- **A small usage record** is kept in the app's own preferences so the daily
+  chart survives restarts: one entry per day, holding a date and a
+  percentage. Nothing identifying, and no message content — the app never
+  sees your conversations.
+
+Both are local to your Mac. The app sends nothing anywhere except its
+requests to claude.ai, and it has no analytics of any kind.
+
+Signing out clears the session key; signing in as a different account also
+clears the stored usage record, so one account's history never shows up
+under another's.
 
 ## Contributing
 
