@@ -542,12 +542,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var days: [UsagePanelModel.Day] = []
         if let resetAt = snapshot.windows.first(where: { $0.id == "sevenDay" })?.resetAt {
             let today = Calendar.current.startOfDay(for: now)
-            days = mergedDays(weekStart: resetAt.addingTimeInterval(-7 * 24 * 60 * 60), now: now)
-                .map {
-                    UsagePanelModel.Day(
-                        label: weekdayLabel($0.day), percent: $0.percent, isToday: $0.day == today
-                    )
-                }
+            let measured = mergedDays(weekStart: resetAt.addingTimeInterval(-7 * 24 * 60 * 60), now: now)
+            let labels = dayLabels(for: measured.map(\.day))
+
+            days = zip(measured, labels).map { day, label in
+                UsagePanelModel.Day(label: label, percent: day.percent, isToday: day.day == today)
+            }
         }
 
         return UsagePanelModel(

@@ -530,3 +530,32 @@ final class UsageLedgerTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(UsageLedger.self, from: data), ledger)
     }
 }
+
+final class DayLabelTests: XCTestCase {
+    private let calendar = Calendar.current
+
+    private func days(from start: Date, count: Int) -> [Date] {
+        (0..<count).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+    }
+
+    func testUsesWeekdayNamesWhenTheyAreUnique() {
+        let labels = dayLabels(
+            for: days(from: calendar.startOfDay(for: Date(timeIntervalSince1970: 1_785_628_800)), count: 7),
+            calendar: calendar
+        )
+        XCTAssertEqual(labels.count, 7)
+        XCTAssertEqual(Set(labels).count, 7)
+        XCTAssertTrue(labels.allSatisfy { $0.count == 3 }, "expected weekday names, got \(labels)")
+    }
+
+    // An eighth day means the window wrapped onto the weekday it began on, so
+    // "Thu" would appear at both ends with no way to tell them apart.
+    func testFallsBackToDayNumbersWhenAWeekdayRepeats() {
+        let labels = dayLabels(
+            for: days(from: calendar.startOfDay(for: Date(timeIntervalSince1970: 1_785_628_800)), count: 8),
+            calendar: calendar
+        )
+        XCTAssertEqual(Set(labels).count, 8, "every column must be distinguishable: \(labels)")
+        XCTAssertTrue(labels.allSatisfy { Int($0) != nil }, "expected day numbers, got \(labels)")
+    }
+}

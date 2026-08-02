@@ -440,6 +440,19 @@ func usageBar(percent: Int, peak: Int, width: Int = 10) -> String {
     return String(repeating: "█", count: min(filled, width))
 }
 
+// Weekday names read best, but they stop being unique when the window wraps
+// onto the weekday it began on: a window that resets Thursday at 03:00 is
+// still running from midnight until then, putting "Thu" at both ends of the
+// chart. Day numbers are unambiguous and, unlike a longer "Thu 30", still fit
+// the narrower columns that eighth day creates.
+func dayLabels(for days: [Date], calendar: Calendar = .current) -> [String] {
+    let names = days.map(weekdayLabel)
+    guard Set(names).count == names.count else {
+        return days.map { String(calendar.component(.day, from: $0)) }
+    }
+    return names
+}
+
 func weekdayLabel(_ date: Date) -> String {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")  // pinned to English, like the rest of the interface
