@@ -1,122 +1,103 @@
 import Foundation
 
-// Bu dosyada arayüzle (menü çubuğu, renkler) ilgili hiçbir şey yok — sadece
-// "dosyayı oku, sayıları hesapla" mantığı. Ekrana çizme işini AppDelegate.swift
-// yapıyor. Bu, menubar/claude-usage.10s.js'teki JS mantığının Swift'e
-// birebir çevirisi — aynı dosyayı okur, aynı hesabı yapar, aynı sonucu verir.
-
-// "struct" = veriyi bir arada tutan basit bir kutu (JS'teki {fh: 5, sd: 9}
-// gibi ama tip-güvenli). "Codable" ise Swift'e "bu struct'ı JSON'dan otomatik
-// doldurabilirsin" demek — JSON.parse'ı elle yazmamıza gerek kalmıyor,
-// alan adları (fh, sd, t, u, samples) JSON'daki adlarla otomatik eşleşiyor.
+// Nothing UI-related (menu bar, colors) lives in this file — just "read the
+// file, compute the numbers" logic. Drawing on screen is AppDelegate.swift's
+// job. This is a direct port of the JS logic in menubar/claude-usage.10s.js —
+// same file, same math, same result.
 
 struct RawUsage: Codable {
-    let fh: Int  // 5 saatlik pencere kullanım yüzdesi
-    let sd: Int  // haftalık (7 gün) pencere kullanım yüzdesi
+    let fh: Int  // 5-hour window usage percentage
+    let sd: Int  // weekly (7-day) window usage percentage
 }
 
 struct RawSample: Codable {
-    let t: Double     // örneğin alındığı an (milisaniye, Unix epoch)
-    let u: RawUsage   // o andaki fh/sd değerleri
+    let t: Double     // when the sample was taken (milliseconds, Unix epoch)
+    let u: RawUsage   // fh/sd values at that moment
 }
 
 struct RawHistory: Codable {
-    let samples: [RawSample]  // dosyadaki tüm örneklerin listesi (dizi)
+    let samples: [RawSample]  // every sample in the file
 }
 
-// KeyPath, Swift'e özgü biraz soyut bir kavram: "RawUsage struct'ının HANGİ
-// alanına bakacağımı sonradan seçebileceğim bir işaretçi" gibi düşün.
-// Yani \.fh, "RawUsage içindeki fh alanını göster" demenin kısa yolu.
-// Bunu kullanmamızın sebebi: aşağıdaki "limits" listesinde hem fh hem sd
-// için AYNI hesaplama fonksiyonlarını (estimateReset gibi) tekrar tekrar
-// yazmadan kullanabilmek — "hangi alana bakılacağı" bir parametre oluyor.
+// The "limits" list below needs to run the same calculation functions
+// (like estimateReset) for both fh and sd without duplicating them — a
+// KeyPath lets "which field to look at" become a parameter instead.
 struct LimitWindow {
-    let id: String          // onbellek anahtari; API tarafiyla ayni olmali
+    let id: String          // cache key; must match the API side
     let key: KeyPath<RawUsage, Int>
-    let label: String       // menüde görünecek Türkçe isim
-    let windowMs: Double     // pencerenin süresi (5 saat ya da 7 gün, milisaniye cinsinden)
+    let label: String       // name shown in the menu
+    let windowMs: Double    // window length (5 hours or 7 days, in milliseconds)
 }
 
-// "let" = değişmeyen sabit (JS'teki const gibi). Bu dosyanın en üst
-// seviyesinde tanımlanan sabitler, programın her yerinden erişilebilir.
 let limits: [LimitWindow] = [
     LimitWindow(id: "fiveHour", key: \.fh, label: "Current session", windowMs: 5 * 60 * 60 * 1000),
     LimitWindow(id: "sevenDay", key: \.sd, label: "Weekly (7 days)", windowMs: 7 * 24 * 60 * 60 * 1000),
 ]
 
-let staleMs: Double = 15 * 60 * 1000  // bu süreden eskiyse veriyi "bayat" sayıyoruz
+let staleMs: Double = 15 * 60 * 1000  // data older than this is considered "stale"
 
-// Claude masaüstü uygulamasının kullanım verisini yazdığı dosyanın tam yolu.
-// NSHomeDirectory(), o an giriş yapmış kullanıcının ev klasörünü (/Users/xxx)
-// döndürür — kullanıcı adını koda hardcode etmemize gerek kalmaz.
+// Full path to the file the Claude desktop app writes its usage data to.
+// NSHomeDirectory() returns the current user's home folder, so we don't
+// need to hardcode a username.
 let historyPath: String = {
     NSHomeDirectory() + "/Library/Application Support/Claude/plan-usage-history.json"
 }()
 
-// "enum Error" = kendi hata türümüzü tanımlamak. JS'te "throw new Error(...)"
-// yerine Swift'te önce hangi hataların olabileceğini burada listeleriz.
 enum UsageError: Error {
-    case empty  // dosya var ama içinde hiç örnek (sample) yok
+    case empty  // file exists but contains no samples
 }
 
-// "throws" = bu fonksiyon hata fırlatabilir demek. Çağıran taraf bunu
-// "try" ile çağırmak ve olası hatayı yakalamak (catch) zorunda —
-// JS'teki try/catch'e çok benzer, sadece derleyici bunu sana zorunlu kılıyor.
 func loadHistory() throws -> [RawSample] {
-    // Data(contentsOf:) dosyayı ham bayt olarak okur (JS'teki readFileSync gibi)
     let data = try Data(contentsOf: URL(fileURLWithPath: historyPath))
-    // JSONDecoder, yukarıdaki Codable struct'ları kullanarak JSON'u otomatik ayrıştırır
     let history = try JSONDecoder().decode(RawHistory.self, from: data)
     if history.samples.isEmpty { throw UsageError.empty }
     return history.samples
 }
 
-// Claude uygulamasi arada bir, tek bir ornekte hatali sifir bildiriyor.
-// Boyle bir ornek, oncesi ve sonrasina bakinca anlasilir: deger sifirdan
-// sonra DOGRUDAN eski seviyesine donuyorsa ortada gercek bir sifirlanma
-// yoktur (gercek sifirlanmadan sonra deger sifirdan yavasca tirmanir),
-// sadece anlik bir raporlama hatasi vardir. Bu ornekleri hesaba katmadan
-// once ayikliyoruz.
+// The Claude app occasionally reports a spurious zero in a single sample.
+// You can spot one by looking at its neighbors: if the value jumps
+// DIRECTLY back to the previous level right after a zero (rather than
+// climbing back up gradually, as a real reset would), there was no real
+// reset — just a momentary reporting glitch. We filter these out before
+// using the data.
 func withoutGlitches(_ samples: [RawSample], key: KeyPath<RawUsage, Int>) -> [RawSample] {
     samples.enumerated().filter { index, sample in
-        // Sadece sifir degerleri supheli; ilk ve son ornegi karsilastiracak
-        // komsusu olmadigi icin oldugu gibi birakiyoruz.
+        // Only zero values are suspect; keep the first/last sample as-is since they have no neighbor to compare against.
         guard sample.u[keyPath: key] == 0, index > 0, index < samples.count - 1 else { return true }
 
         let before = samples[index - 1].u[keyPath: key]
         let after = samples[index + 1].u[keyPath: key]
-        return !(before > 0 && after >= before)  // eski seviyeye dondu -> hatali okuma
+        return !(before > 0 && after >= before)  // jumped back to the previous level -> bogus reading
     }
     .map(\.element)
 }
 
-// Mevcut pencerenin ne zaman sifirlanacagini TAHMIN eder. (Giris yapilmissa
-// bu fonksiyona hic gerek yok — canli API kesin zamani veriyor. Burasi
-// yalnizca yedek yol.)
+// ESTIMATES when the current window will reset. (If signed in, this
+// function isn't needed at all — the live API gives an exact time. This is
+// only the fallback path.)
 //
-// Temel fikir: bir pencere icinde kullanim yuzdesi yalnizca ARTAR, asla
-// azalmaz. Dolayisiyla ardisik iki ornek arasindaki her DUSUS, arada bir
-// sifirlanma oldugunun kanitidir.
+// Core idea: within a window, usage percentage only ever INCREASES, never
+// decreases. So any decrease between two consecutive samples is evidence
+// that a reset happened in between.
 //
-// Onceki surum sinirlari yalnizca 0 degerine bakarak ariyordu ve bu hatali
-// idi: sifirlanmadan hemen sonra kullanima devam edilirse deger hicbir
-// ornekte 0 gorunmez (gercek ornek: %92 -> %3). O durumda sinir kaciriliyor,
-// algoritma cok daha eski bir sinira yuruyor ve gecmiste kalan bir zaman
-// hesaplayip "bilinmiyor" donuyordu.
+// The previous version only looked for boundaries at an actual 0 value,
+// which was wrong: if usage continues right after a reset, the value may
+// never appear as 0 in any sample (real example: 92% -> 3%). In that case
+// the boundary is missed, the algorithm walks back to a much older
+// boundary, and computes a time in the past, returning "unknown".
 //
-// "key: KeyPath<RawUsage, Int>" parametresi sayesinde bu TEK fonksiyon hem
-// fh hem sd için çalışıyor — çağıran taraf hangisine bakacağını \.fh ya da
-// \.sd olarak veriyor (bkz. UsageData.fileSnapshot'taki kullanım).
+// The `key: KeyPath<RawUsage, Int>` parameter lets this ONE function work
+// for both fh and sd — the caller passes \.fh or \.sd (see the usage in
+// UsageData.fileSnapshot).
 func estimateReset(
     samples: [RawSample], key: KeyPath<RawUsage, Int>, windowMs: Double, now: Double
-) -> Double? {  // dönüş tipindeki "?" = "ya bir sayı ya da hiçbir şey (nil)" demek — Optional
+) -> Double? {
     let samples = withoutGlitches(samples, key: key)
 
-    // "guard let" = "last diye bir şey varsa devam et, yoksa hemen çık (return)".
     guard let last = samples.last, last.u[keyPath: key] > 0 else { return nil }
 
-    // En son dususu (yani en yakin sifirlanmayi) geriye dogru tarayarak bul.
-    var boundary = 0  // hic dusus yoksa dosyanin basindan itibaren bakariz
+    // Scan backward for the most recent decrease (i.e. the nearest reset).
+    var boundary = 0  // if there's no decrease at all, look from the start of the file
     var i = samples.count - 1
     while i > 0 {
         if samples[i].u[keyPath: key] < samples[i - 1].u[keyPath: key] {
@@ -126,9 +107,9 @@ func estimateReset(
         i -= 1
     }
 
-    // Pencere, sifirlanma aninda degil, ondan sonraki ILK GERCEK KULLANIMDA
-    // baslar. Ornegin gece boyu Claude kullanilmadiysa, sifirlanma ile ilk
-    // kullanim arasinda saatlerce bosluk olabilir.
+    // The window starts not at the moment of the reset, but at the FIRST
+    // ACTUAL USE after it. For example, if Claude wasn't used overnight,
+    // there can be hours of gap between the reset and the first use.
     var start = boundary
     while start < samples.count && samples[start].u[keyPath: key] == 0 { start += 1 }
     guard start < samples.count else { return nil }
@@ -137,43 +118,41 @@ func estimateReset(
     return resetAt > now ? resetAt : nil
 }
 
-// Milisaniyeyi "4s 32dk" gibi okunaklı bir Türkçe metne çeviriyor.
+// Converts milliseconds into a readable string like "4h 32m".
 func formatDuration(_ ms: Double) -> String {
     if ms <= 0 { return "soon" }
     let totalMin = Int((ms / 60000).rounded())
     let days = totalMin / 1440
     let hours = (totalMin % 1440) / 60
     let mins = totalMin % 60
-    if days > 0 { return "\(days)d \(hours)h" }  // \(...) = string interpolation, JS'teki ${...} ile ayni
+    if days > 0 { return "\(days)d \(hours)h" }
     if hours > 0 { return "\(hours)h \(mins)m" }
     return "\(mins)m"
 }
 
-// "4d 6h" gibi bir sürenin yanına, hangi gün ve saatte sıfırlanacağını da
-// ekliyoruz — "EEE h:mm a" = "Thu 3:00 AM" gibi kısa gün adı + Claude'un
-// masaüstü uygulamasıyla aynı 12 saatlik (AM/PM) saat gösterimi.
+// Appends which day and time a duration like "4d 6h" actually falls on —
+// "EEE h:mm a" = short weekday name + 12-hour clock, e.g. "Thu 3:00 AM",
+// matching Claude's own desktop app.
 private func weekdayClock(_ date: Date) -> String {
     let formatter = DateFormatter()
-    // Arayüzün geri kalanı gibi bunu da sabit İngilizce tutuyoruz — sistem
-    // dili Türkçe olsaydı "a" sembolü AM/PM yerine ÖÖ/ÖS basardı.
+    // Pinned to English like the rest of the interface — otherwise "a"
+    // would print the system language's own localized AM/PM symbols.
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.dateFormat = "EEE h:mm a"
     return formatter.string(from: date)
 }
 
-// Menüde "Sıfırlanma: ..." satırında gösterilecek metni üretir. Veri canlı
-// API'den geldiyse sunucunun verdiği kesin zamanı yazıyoruz; yerel dosyadan
-// geldiyse kendi tahminimiz olduğunu kullanıcıya açıkça belirtiyoruz.
+// Builds the text shown on the "Resets: ..." line in the menu. If the data
+// came from the live API we show the server's exact time; if it came from
+// the local file, we make clear to the user that it's our own estimate.
 func resetLabel(percent: Int, resetAt: Date?, isEstimate: Bool, now: Date) -> String {
-    // "if let resetAt" = "resetAt gerçekten bir değer içeriyorsa, onu aç ve kullan"
     if let resetAt {
         let interval = resetAt.timeIntervalSince(now)
         let text = formatDuration(interval * 1000)
 
-        // Gün ölçeğindeki (haftalık) pencerede kullanıcı hangi gün/saatte
-        // sıfırlanacağını bilmek işe yarar; birkaç saatlik oturum
-        // penceresinde bu zaten "bugün" demek olduğu için gereksiz
-        // kalabalık olurdu — o yüzden yalnızca ~1 günden uzun kalanlarda ekliyoruz.
+        // Knowing the exact day/time is useful for a day-scale (weekly)
+        // window; for the few-hour session window it already means "today",
+        // so it would just be noise — hence only adding it past ~1 day out.
         var notes: [String] = []
         if interval > 20 * 60 * 60 { notes.append(weekdayClock(resetAt)) }
         if isEstimate { notes.append("estimated") }
@@ -185,25 +164,24 @@ func resetLabel(percent: Int, resetAt: Date?, isEstimate: Bool, now: Date) -> St
     return "unknown"
 }
 
-// Yerel dosyadan okunan ham örnekleri, canlı API'nin de kullandığı ortak
-// UsageSnapshot şekline çeviriyor. Bu dönüşüm sayesinde AppDelegate tek bir
-// çizim koduyla her iki kaynağı da gösterebiliyor (bkz. UsageSnapshot.swift).
+// Converts the raw samples read from the local file into the same
+// UsageSnapshot shape the live API uses. This lets AppDelegate draw both
+// sources with a single rendering path (see UsageSnapshot.swift).
 func fileSnapshot(samples: [RawSample], now: Double) -> UsageSnapshot {
     guard let last = samples.last else {
         return UsageSnapshot(windows: [], capturedAt: Date(), source: .localFile)
     }
 
-    // "limits.map { ... }" = listedeki her eleman için köşeli parantez
-    // içindeki dönüşümü uygulayıp yeni bir liste üret (JS'teki .map ile aynı).
     let windows = limits.map { limit in
-        // Daha önce API'den öğrendiğimiz KESIN zaman hâlâ gelecekteyse onu
-        // kullan — tahmin yürütmeye gerek yok, çünkü o an değişmedi.
-        // Haftalık pencerede bu özellikle değerli: sıfırlanma günler sonra
-        // olduğu için önbellekteki değer günlerce doğru kalıyor.
+        // If we already learned an EXACT time from the API and it's still
+        // in the future, use it — no need to estimate, since that moment
+        // hasn't changed. This is especially valuable for the weekly
+        // window: since the reset is days away, the cached value stays
+        // correct for days.
         let cached = SessionStore.cachedResetAt(limit.id)
         let cachedIsUsable = (cached?.timeIntervalSinceNow ?? -1) > 0
 
-        // estimateReset milisaniye döndürüyor; Date'e çeviriyoruz.
+        // estimateReset returns milliseconds; convert to Date.
         let estimated = estimateReset(
             samples: samples, key: limit.key, windowMs: limit.windowMs, now: now
         ).map { Date(timeIntervalSince1970: $0 / 1000) }

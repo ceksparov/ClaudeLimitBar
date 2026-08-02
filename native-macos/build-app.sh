@@ -1,40 +1,40 @@
 #!/bin/bash
-# ClaudeLimitBar.app paketini olusturur.
+# Builds the ClaudeLimitBar.app bundle.
 #
-# SwiftPM ciplak bir calistirilabilir uretir; macOS'un bunu "uygulama" olarak
-# gormesi icin belirli bir klasor yapisi ve Info.plist gerekir. Bu betik onu
-# kuruyor.
+# SwiftPM produces a bare executable; macOS needs a specific folder
+# structure and an Info.plist for it to be recognized as an "app". This
+# script sets that up.
 #
-# Kullanim:  ./build-app.sh          -> ClaudeLimitBar.app uretir
-#            ./build-app.sh --zip    -> ayrica dagitima hazir .zip uretir
+# Usage:  ./build-app.sh          -> produces ClaudeLimitBar.app
+#         ./build-app.sh --zip    -> also produces a distributable .zip
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 APP_NAME="ClaudeLimitBar"
-# Bundle identifier, macOS'un uygulamani benzersiz olarak tanidigi kimlik.
-# Yayinlarken kendi alan adin/GitHub kullanici adinla degistir.
+# Bundle identifier, the id macOS uses to uniquely recognize the app.
+# Replace with your own domain/GitHub username if you publish your own build.
 BUNDLE_ID="io.github.claudelimitbar"
 VERSION="0.1.0"
 
 APP_DIR="$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
 
-echo "==> Release derlemesi"
+echo "==> Release build"
 swift build -c release
 
-echo "==> $APP_DIR olusturuluyor"
+echo "==> Creating $APP_DIR"
 rm -rf "$APP_DIR"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
 cp ".build/release/$APP_NAME" "$CONTENTS/MacOS/$APP_NAME"
 cp "Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 
-# LSUIElement = "bu uygulamanin Dock simgesi ve menu cubugu menusu olmasin,
-# sadece arka planda calissin". Menu cubugu uygulamalarinin olmazsa olmazi.
-# (Kodda ayrica NSApp.setActivationPolicy(.accessory) var; ikisi birlikte
-# uygulamanin acilista bir an bile Dock'ta gorunmemesini garantiliyor.)
+# LSUIElement = "this app has no Dock icon and no menu bar application
+# menu, it just runs in the background" — essential for a menu bar app.
+# (The code also sets NSApp.setActivationPolicy(.accessory); together the
+# two guarantee the app never shows in the Dock, not even for a moment at launch.)
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -54,19 +54,21 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Imzasiz bir uygulama macOS'ta calismaz; en azindan ad-hoc imza sart.
-# ("-s -" = ad-hoc, yani sertifikasiz imza. Developer ID sertifikan varsa
-#  onun adini yazarak imzalayabilirsin: codesign -s "Developer ID Application: ...")
-echo "==> Ad-hoc imzalaniyor"
+# An unsigned app won't run on macOS; at minimum an ad-hoc signature is
+# required. ("-s -" = ad-hoc, i.e. an unsigned/certificate-less signature.
+# If you have a Developer ID certificate, sign with it by name instead:
+# codesign -s "Developer ID Application: ...")
+echo "==> Ad-hoc signing"
 codesign --force --deep -s - "$APP_DIR"
 
-echo "==> Hazir: $APP_DIR"
+echo "==> Ready: $APP_DIR"
 
 if [[ "${1:-}" == "--zip" ]]; then
     ZIP="$APP_NAME-$VERSION-macos.zip"
     rm -f "$ZIP"
-    # ditto, .app paketlerini bozmadan (sembolik baglar, izinler, genisletilmis
-    # oznitelikler dahil) sikistiran macOS araci — duz "zip" bunlari kaybedebilir.
+    # ditto is the macOS tool that compresses .app bundles without breaking
+    # them (symlinks, permissions, extended attributes included) — a plain
+    # "zip" can lose these.
     ditto -c -k --keepParent "$APP_DIR" "$ZIP"
-    echo "==> Dagitim paketi: $ZIP"
+    echo "==> Distribution package: $ZIP"
 fi

@@ -1,31 +1,27 @@
 import AppKit
 import ServiceManagement
 
-// Bu dosya, "ekrana ne çizeceğiz" işini yapıyor: menü çubuğu simgesi,
-// açılan menü, renkler, tıklama davranışları. Hesaplama mantığı yok,
-// o UsageData.swift ve UsageAPI.swift'te.
-//
-// NOT: Kod yorumları Türkçe (öğrenme amaçlı), ama kullanıcıya GÖRÜNEN
-// her metin İngilizce — uygulama GitHub'da yayınlanacağı için arayüz
-// dilinin İngilizce olması gerekiyor.
+// This file handles "what do we draw on screen": the menu bar icon, the
+// dropdown menu, colors, click behavior. No calculation logic lives here —
+// that's in UsageData.swift and UsageAPI.swift.
 
-// Yüzdeye göre renk seçiyor. NSColor'ı "red/green/blue" 0-1 arası ondalık
-// sayılarla kuruyoruz (JS'teki #ff3b30 hex kodunun aynısı, sadece
-// 0-255 yerine 0-1 arasına bölünmüş hâli — 255/255=1.00, 59/255=0.231 gibi).
+// Picks a color based on percentage. NSColor is built from "red/green/blue"
+// as 0-1 decimals (the same as the #ff3b30 hex code, just divided by 255
+// instead of written in hex — 255/255=1.00, 59/255=0.231, etc.).
 func colorFor(_ pct: Int) -> NSColor {
-    if pct >= 80 { return NSColor(red: 1.00, green: 0.231, blue: 0.188, alpha: 1) } // #ff3b30 kırmızı
-    if pct >= 50 { return NSColor(red: 1.00, green: 0.624, blue: 0.039, alpha: 1) } // #ff9f0a turuncu
-    return NSColor(red: 0.188, green: 0.820, blue: 0.345, alpha: 1) // #30d158 yeşil
+    if pct >= 80 { return NSColor(red: 1.00, green: 0.231, blue: 0.188, alpha: 1) } // #ff3b30 red
+    if pct >= 50 { return NSColor(red: 1.00, green: 0.624, blue: 0.039, alpha: 1) } // #ff9f0a orange
+    return NSColor(red: 0.188, green: 0.820, blue: 0.345, alpha: 1) // #30d158 green
 }
 
-// .secondaryLabelColor = sistemin kendi "soluk gri" rengi; açık/koyu temaya
-// göre otomatik uyum sağlıyor, bizim hex girmemize gerek yok.
+// .secondaryLabelColor is the system's own "muted gray" — it adapts to
+// light/dark mode automatically, so we don't need to hardcode a hex value.
 let grayText = NSColor.secondaryLabelColor
 let warningColor = NSColor(red: 1.00, green: 0.624, blue: 0.039, alpha: 1) // #ff9f0a
 
-// Menüdeki her satır düz metin değil, "renkli ve belirli boyutta" metin
-// olduğu için NSAttributedString kullanıyoruz — normal String'e "şu renk,
-// şu font" gibi ek bilgiler (attribute) yapıştırılmış hâli.
+// Each menu row isn't plain text, it's "colored text at a specific size",
+// so we use NSAttributedString — a regular String with extra attributes
+// (color, font) attached to it.
 func attributed(_ text: String, color: NSColor, small: Bool = false) -> NSAttributedString {
     NSAttributedString(string: text, attributes: [
         .foregroundColor: color,
@@ -33,33 +29,23 @@ func attributed(_ text: String, color: NSColor, small: Bool = false) -> NSAttrib
     ])
 }
 
-// "class" = değiştirilebilir, referansla taşınan nesne türü (struct'ın
-// aksine). "NSApplicationDelegate" = "NSApplication'ın önemli anlarda
-// çağıracağı fonksiyonları barındırıyorum" demek (bkz. main.swift).
-// "NSMenuDelegate" ise menünün açılıp kapandığını bize haber verir —
-// açık bir menüyü altından değiştirmemek için buna ihtiyacımız var.
-// "final" = bu sınıftan başka bir sınıf türetilemez demek, sadece bir
-// güvenlik/performans notu, davranışı etkilemiyor.
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    // statusItem = menü çubuğundaki simgemizin kendisi. ".variableLength"
-    // = genişliği içindeki metne göre otomatik ayarlansın (sabit piksel değil).
+    // statusItem is the icon itself in the menu bar. ".variableLength" means
+    // its width auto-adjusts to the text inside it, rather than a fixed size.
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    // Timer? — "?" yine Optional: uygulama henüz başlamadan bu nil (boş),
-    // applicationDidFinishLaunching çalışınca gerçek bir Timer'la doluyor.
     private var timer: Timer?
     private let loginWindow = LoginWindowController()
 
-    // Menü açıkken menüyü yeniden kurarsak kullanıcının elinin altında
-    // titreşir/kapanır. Bu bayrak sayesinde açıkken çizimi erteliyoruz.
+    // Rebuilding the menu while it's open would make it flicker/close under
+    // the user's cursor. This flag lets us defer drawing while it's open.
     private var menuIsOpen = false
 
-    // "Start at Login" gibi kullanıcının BİZZAT az önce tıkladığı bir menü
-    // öğesinden hemen sonra çizimi güncellemek istediğimizde bunu true
-    // yapıyoruz — AppKit'in "menü kapandı" ile "aksiyon çalıştı" olaylarını
-    // hangi sırayla gönderdiği garanti olmadığından, menuIsOpen hâlâ true
-    // görünüp güncellemeyi sessizce atlayabiliyordu; kullanıcı tiki
-    // işaretliyor ama menüde bir sonraki periyodik yenilemeye kadar
-    // görünmüyordu.
+    // Set to true when we want to redraw immediately after the user
+    // themselves just clicked a menu item (e.g. "Start at Login") — AppKit
+    // doesn't guarantee the order in which "menu closed" and "action fired"
+    // events arrive, so menuIsOpen could still read true and the update
+    // would be silently skipped; the user checks the box but doesn't see it
+    // reflected until the next periodic refresh.
     private var bypassMenuOpenGuardOnce = false
 
     private func shouldSkipRedraw() -> Bool {
@@ -69,73 +55,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         return menuIsOpen
     }
-    // API çağrısı başarısız olup yerel dosyaya düştüysek, sebebini menüde
-    // göstermek için saklıyoruz.
+
+    // If an API call failed and we fell back to the local file, we keep the
+    // reason around to show it in the menu.
     private var apiError: Error?
 
-    // Oturum süresi dolduğunda true olur ve kullanıcı yeniden giriş yapana
-    // kadar öyle kalır. Ayrı bir bayrak tutmamızın sebebi: süresi dolan
-    // anahtarı hemen siliyoruz, o yüzden apiError bir sonraki döngüde
-    // temizleniyor — bayrak olmasaydı "yeniden giriş yapın" uyarısı 20
-    // saniye sonra kaybolur, kullanıcı neden veri gelmediğini anlamazdı.
+    // Becomes true once the session expires and stays true until the user
+    // signs in again. We keep this as a separate flag because we clear the
+    // expired key right away, so apiError gets wiped on the next loop —
+    // without this flag, the "please sign in again" warning would vanish
+    // after 20 seconds and the user wouldn't understand why data stopped
+    // coming in.
     private var needsReauth = false
 
-    // Hesaba bağlı organizasyonlar. Çoğu kişide tek tane olur; Team/Enterprise
-    // hesaplarında birden fazla olabiliyor ve o zaman kullanıcının hangisine
-    // baktığını seçebilmesi gerekiyor (bkz. appendOrganizationMenu).
+    // Organizations tied to the account. Most people have just one; Team/
+    // Enterprise accounts can have several, in which case the user needs to
+    // be able to pick which one they're looking at (see appendOrganizationMenu).
     private var organizations: [UsageAPI.Organization] = []
-    // Organizasyon listesini en son ne zaman çektik? Hiç yenilemezsek yeni
-    // bir takıma katılan kullanıcı onu menüde göremez; her turda denersek de
-    // hesapta tek organizasyon varken 20 saniyede bir boşuna istek atarız.
-    // Yarım saatte bir tazelemek ikisinin arasında makul bir denge.
+    // When did we last fetch the organization list? Never refreshing it
+    // means a user who just joined a new team wouldn't see it in the menu;
+    // retrying every cycle would mean a pointless request every 20 seconds
+    // for the common case of a single organization. Refreshing every half
+    // hour is a reasonable middle ground.
     private var organizationsLoadedAt: Date?
 
-    // Sunucu "çok sık istek atıyorsun" (429) derse bu tarihe kadar hiç
-    // istek atmıyoruz. Aynı hızda devam etmek engeli uzatabilir; geri
-    // çekilmek hem bize hem sunucuya doğru olan davranış.
+    // If the server says "you're requesting too often" (429), we don't send
+    // any request until this date. Continuing at the same rate could extend
+    // the block; backing off is the right behavior for both us and the server.
     private var pauseUntil: Date?
 
-    // Aynı anda birden fazla istek uçuşmasın. Bir istek 15 saniyeye kadar
-    // sürebiliyor; zamanlayıcı 20 saniyede bir, menü her kapandığında da
-    // bir kez tetikliyor. Bu koruma olmazsa üst üste binen istekler hem
-    // gereksiz trafik yaratır hem de sonuçlar ters sırada gelip ekranda
-    // eski veriyi gösterebilir.
+    // Don't let more than one request be in flight at once. A request can
+    // take up to 15 seconds; the timer fires every 20 seconds, and closing
+    // the menu also triggers one. Without this guard, overlapping requests
+    // would both waste bandwidth and could return out of order, leaving
+    // stale data on screen.
     private var isFetching = false
     private var lastFetchAt: Date?
 
-    // Üst üste kaç kez kimlik hatası aldık? Tek bir hatada kullanıcıyı
-    // çıkış yaptırmak riskli: yanlış karar verirsek insanın çalışan
-    // oturumunu yok etmiş oluruz. Üç kez üst üste (yani ~1 dakika boyunca)
-    // reddedilirse oturumun gerçekten bittiğine hükmediyoruz.
+    // How many consecutive auth failures have we seen? Signing the user out
+    // on a single failure is risky — a wrong call here destroys a session
+    // that was actually still working. We only conclude the session is
+    // really over after three failures in a row (i.e. roughly a minute).
     private var consecutiveAuthFailures = 0
 
-    // "Start at Login" kaydı başarısız olduysa sebebini menüde göstermek
-    // için saklıyoruz. Sadece log'a yazmak yetmiyor: paketlenmiş uygulamada
-    // stdout hiçbir yere gitmediği için kullanıcı tikin neden açılmadığını
-    // hiç öğrenemezdi.
+    // If registering "Start at Login" failed, we keep the reason around to
+    // show it in the menu. Logging alone isn't enough: in a packaged app,
+    // stdout goes nowhere, so the user would never learn why the checkbox
+    // didn't take.
     private var startAtLoginError: String?
 
-    // En son çizdiğimiz veri. Menüyü ağdan bir şey çekmeden yeniden
-    // kurabilmek için saklıyoruz (ör. "Start at Login" tikini güncellemek
-    // gerektiğinde sunucuya gitmenin anlamı yok).
+    // The last data we rendered. We keep this so we can rebuild the menu
+    // without hitting the network (e.g. there's no point calling the server
+    // just to refresh the "Start at Login" checkmark).
     private var lastSnapshot: UsageSnapshot?
 
-    // NSApplication açıldığında AppKit bu fonksiyonu otomatik çağırır
-    // (JS'teki "DOMContentLoaded" event'ine benzer bir "artık hazırım" anı).
+    // AppKit calls this automatically once NSApplication has finished
+    // launching (similar to a "DOMContentLoaded"-style "I'm ready now" moment).
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // .accessory = "Dock'ta simge gösterme, sadece menü çubuğunda yaşa".
+        // .accessory = "don't show a Dock icon, just live in the menu bar".
         NSApp.setActivationPolicy(.accessory)
 
-        // SF Symbols, Apple'ın hazır ikon setinin adı; "bolt.fill" bizim
-        // şimşek ikonumuz.
+        // SF Symbols is Apple's built-in icon set; "bolt.fill" is our
+        // lightning-bolt icon.
         statusItem.button?.image = NSImage(
             systemSymbolName: "bolt.fill", accessibilityDescription: "Claude Usage"
         )
-        statusItem.button?.imagePosition = .imageLeading  // ikon solda, yüzde metni sağda
+        statusItem.button?.imagePosition = .imageLeading  // icon on the left, percentage text on the right
 
-        // Açılışta tek satırlık durum kaydı. Kullanıcı bir sorun bildirdiğinde
-        // ilk sorulacak şeyler bunlar: hangi sürüm, paketlenmiş mi çalışıyor,
-        // giriş yapılmış mı. (Oturum anahtarının kendisi asla loglanmaz.)
+        // A one-line status log at launch. If a user reports an issue,
+        // these are the first things worth knowing: which version, whether
+        // it's running packaged, whether they're signed in. (The session
+        // key itself is never logged.)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         log(
             "started — v\(version ?? "dev"), "
@@ -143,71 +133,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 + "signed in: \(SessionStore.sessionKey != nil)"
         )
 
-        refresh()  // uygulama açılır açılmaz bir kere hemen göster
+        refresh()  // show something immediately once the app launches
 
-        // Canlı API'den 20 saniyede bir çekiyoruz. Daha sık sorgulamak
-        // teoride mümkün ama sunucu tarafında hız sınırına (rate limit)
-        // takılma riski var; 20 saniye, yerel dosyanın 5 dakikalık yazma
-        // aralığına kıyasla zaten çok daha güncel bir veri demek.
+        // Poll the live API every 20 seconds. Polling more often is
+        // technically possible, but risks hitting a server-side rate limit;
+        // 20 seconds is already far more current than the local file's
+        // 5-minute write interval.
         //
-        // "{ [weak self] _ in ... }" bir closure (JS'teki () => {} gibi
-        // anonim fonksiyon). "[weak self]" ise hafıza sızıntısını önleyen
-        // bir güvenlik notu: Timer, AppDelegate'i "zayıf" (weak) referansla
-        // tutuyor, yani AppDelegate bir gün yok edilirse Timer onu
-        // sonsuza dek hayatta tutmaya zorlamıyor.
+        // "[weak self]" avoids a memory leak: the timer holds a weak
+        // reference to AppDelegate, so if AppDelegate were ever deallocated,
+        // the timer wouldn't be forced to keep it alive forever.
         timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-            self?.refresh()  // "?" burada da Optional: self hâlâ varsa çağır
+            self?.refresh()
         }
     }
 
-    // MARK: - Veri çekme
+    // MARK: - Fetching data
 
-    // Giriş yapılmışsa canlı API'yi, yapılmamışsa doğrudan yerel dosyayı
-    // kullanıyoruz. Bu, uygulamanın iki kaynağı yönettiği merkez nokta.
-    // force: kullanıcının kendi tıklamasıyla tetiklenen yenilemeler için.
-    // Aşağıdaki hız sınırlamaları arka plandaki zamanlayıcı içindir; kullanıcı
-    // giriş yaptığında ya da organizasyon değiştirdiğinde sonucu HEMEN
-    // görmeli, "5 saniye geçmedi" diye beklememeli.
+    // If signed in, use the live API; otherwise read the local file
+    // directly. This is the central point where the app manages both
+    // sources. `force` is for refreshes triggered by the user's own click —
+    // the rate limits below are meant for the background timer; when the
+    // user signs in or switches organizations, they should see the result
+    // IMMEDIATELY, not wait because "5 seconds haven't passed yet".
     private func refresh(force: Bool = false) {
         if SessionStore.sessionKey == nil {
             apiError = nil
-            organizations = []  // çıkış yapıldıysa eski listeyi taşıma
+            organizations = []  // don't carry over the old list after signing out
             renderFromFile()
             return
         }
 
-        // Zaten uçuşan bir istek varsa ikincisini başlatma. Bu koruma
-        // kullanıcı tetiklese bile geçerli — iki eşzamanlı istek sonuçları
-        // ters sırada döndürüp ekranda eski veriyi bırakabilir.
+        // Don't start a second request if one is already in flight. This
+        // guard applies even if the user triggered it — two concurrent
+        // requests could return out of order and leave stale data on screen.
         guard !isFetching else { return }
 
         if !force {
-            // Oran sınırına takıldıysak süre dolana kadar hiç istek atmıyoruz.
+            // If we're rate-limited, don't send any request until it lifts.
             if let pauseUntil, pauseUntil > Date() {
                 renderFromFile()
                 return
             }
 
-            // Menü her kapandığında da yeniliyoruz; kullanıcı menüyü arka
-            // arkaya açıp kapatırsa bu saniyede birkaç isteğe dönüşebilir.
-            // Ardışık iki istek arasına en az 5 saniye koyuyoruz.
+            // We also refresh every time the menu closes; if the user opens
+            // and closes it repeatedly, that could turn into several
+            // requests in a single second. Enforce at least 5 seconds
+            // between consecutive requests.
             if let lastFetchAt, Date().timeIntervalSince(lastFetchAt) < 5 { return }
         }
 
-        // "Task { ... }" = "şu işi arka planda başlat, bitince devam et".
-        // Ağ isteği saniyeler sürebilir; bunu doğrudan burada beklersek
-        // menü çubuğu donardı. Task sayesinde arayüz akıcı kalıyor.
+        // A network request can take seconds; awaiting it directly here
+        // would freeze the menu bar. Task keeps the UI responsive.
         Task { await refreshFromAPI() }
     }
 
-    // "@MainActor" = bu fonksiyonun gövdesi her zaman ana iş parçacığında
-    // (UI thread) çalışsın demek. AppKit'e dokunan her şey ana thread'de
-    // olmak ZORUNDA; bu işaret olmadan çökme/bozulma riski var.
+    // "@MainActor" means this function's body always runs on the main
+    // (UI) thread. Anything touching AppKit MUST run on the main thread;
+    // without this annotation there's a real risk of crashes/corruption.
     @MainActor
     private func refreshFromAPI() async {
         isFetching = true
         lastFetchAt = Date()
-        defer { isFetching = false }  // defer = fonksiyondan nasıl çıkarsak çıkalım çalışır
+        defer { isFetching = false }  // runs no matter how the function exits
 
         do {
             let snapshot = try await UsageAPI.fetchSnapshot()
@@ -218,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await loadOrganizationsIfNeeded()
 
         } catch APIError.rateLimited(let retryAfter) {
-            // Sunucunun önerdiği süreyi kullan; vermemişse 5 dakika bekle.
+            // Use the server's suggested wait time; default to 5 minutes if it didn't give one.
             let wait = retryAfter ?? 300
             pauseUntil = Date().addingTimeInterval(wait)
             log("rate limited — pausing for \(Int(wait))s")
@@ -226,18 +214,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             renderFromFile()
 
         } catch APIError.unauthorized where consecutiveAuthFailures < 2 {
-            // Henüz emin değiliz — anahtara dokunmadan yerel dosyaya düş.
+            // Not sure yet — fall back to the local file without touching the key.
             consecutiveAuthFailures += 1
             apiError = APIError.unauthorized
             renderFromFile()
 
         } catch APIError.unauthorized {
-            // Anahtar artık ölü (oturum süresi doldu ya da başka bir yerden
-            // iptal edildi). Onu Keychain'de tutmanın hiçbir faydası yok:
-            // her 20 saniyede bir çalışmayacağı bilinen bir istek atardık ve
-            // menüde "Sign In" yerine "Sign Out" yazmaya devam ederdi —
-            // kullanıcı önce çıkış yapmayı akıl etmek zorunda kalırdı.
-            // Silince menü kendiliğinden girişe dönüyor.
+            // The key is dead now (session expired, or revoked elsewhere).
+            // There's no benefit to keeping it in the Keychain: we'd keep
+            // sending a request every 20 seconds that we know will fail,
+            // and the menu would keep saying "Sign Out" instead of "Sign
+            // In". Clearing it lets the menu return to the sign-in state
+            // on its own.
             log("session expired — key cleared, sign-in required")
             SessionStore.clear()
             SessionStore.orgId = nil
@@ -245,25 +233,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             organizationsLoadedAt = nil
             needsReauth = true
             apiError = nil
-            // Eski API anlık görüntüsünü de bırakmıyoruz: redraw() onu
-            // yeniden çizip, oturum kapalıyken "Source: claude.ai (live)"
-            // diyerek eski kullanım verisini gösterebilirdi.
+            // Also drop the old API snapshot: redraw() would otherwise
+            // redraw it and show stale usage data under "Source: claude.ai
+            // (live)" while actually signed out.
             lastSnapshot = nil
             renderFromFile()
 
         } catch {
-            // Geçici bir sorun (internet yok, zaman aşımı, sunucu hatası).
-            // Uygulamayı kırmak yerine sessizce yerel dosyaya düşüyoruz —
-            // kullanıcı yine bir şeyler görsün, sebebi de menüde yazsın.
-            // Anahtara DOKUNMUYORUZ: geçici bir kesinti yüzünden kullanıcıyı
-            // yeniden giriş yapmaya zorlamak yanlış olurdu.
+            // A transient problem (no internet, timeout, server error).
+            // Rather than breaking the app, we quietly fall back to the
+            // local file — the user still sees something, and the reason
+            // is shown in the menu. We do NOT touch the key: forcing a
+            // re-login over a temporary outage would be wrong.
             apiError = error
             renderFromFile()
         }
     }
 
-    // Organizasyon listesini yalnızca bir kez çekiyoruz; her 20 saniyede bir
-    // tekrar sormanın anlamı yok, bu liste neredeyse hiç değişmiyor.
+    // We only fetch the organization list once; asking again every 20
+    // seconds is pointless since this list almost never changes.
     @MainActor
     private func loadOrganizationsIfNeeded() async {
         if let loadedAt = organizationsLoadedAt, Date().timeIntervalSince(loadedAt) < 1800 {
@@ -271,15 +259,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         organizationsLoadedAt = Date()
 
-        // Başarısız olursa elimizdeki listeyi KORUYORUZ. "?? []" deseydik
-        // geçici bir hata, menüdeki organizasyon seçimini kullanıcının
-        // gözü önünde yok ederdi.
+        // On failure, KEEP the existing list. Using "?? []" instead would
+        // make a transient error wipe the organization picker right in
+        // front of the user.
         if let fetched = try? await UsageAPI.organizations() {
             organizations = fetched
         }
     }
 
-    // Menüyü, elimizdeki son veriyle yeniden kurar — sunucuya gitmeden.
+    // Rebuilds the menu from whatever data we already have, without hitting the server.
     private func redraw() {
         if let lastSnapshot {
             render(lastSnapshot)
@@ -289,7 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func renderFromFile() {
-        let now = Date().timeIntervalSince1970 * 1000  // "şu an", milisaniye cinsinden
+        let now = Date().timeIntervalSince1970 * 1000  // "now", in milliseconds
         do {
             let samples = try loadHistory()
             render(fileSnapshot(samples: samples, now: now))
@@ -298,14 +286,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: - Çizim
+    // MARK: - Drawing
 
-    // Asıl "menü çubuğunda ne yazsın, dropdown'da neler olsun" mantığı burada.
+    // The actual "what goes in the menu bar, what's in the dropdown" logic lives here.
     private func render(_ snapshot: UsageSnapshot) {
-        // Hiç pencere yoksa gösterecek bir şey de yok. Bunu "%0" diye
-        // göstermek YANLIŞ olur — kullanıcı hiç kullanmadığını sanır.
-        // (Sunucu bazı hesap türleri için her iki pencereyi de boş
-        // dönebiliyor; o zaman elimizde veri yok demektir, sıfır değil.)
+        // No windows means nothing to show. Displaying "0%" here would be
+        // WRONG — the user would think they've used nothing. (The server
+        // can return both windows empty for some account types; that means
+        // we have no data, not zero usage.)
         guard !snapshot.windows.isEmpty else {
             renderNoData()
             return
@@ -314,28 +302,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lastSnapshot = snapshot
         let now = Date()
         let age = now.timeIntervalSince(snapshot.capturedAt) * 1000
-        // Canlı API verisi tanımı gereği taze; bayatlık sadece yerel dosya
-        // için anlamlı bir kavram.
+        // Live API data is fresh by definition; staleness only makes sense for the local file.
         let stale = snapshot.source == .localFile && age > staleMs
         let headline = snapshot.windows.first?.percent ?? 0
 
-        // Menü çubuğundaki "⚡ 14%" yazısı — bu menü açıkken bile
-        // güncellenebilir, çünkü menünün bir parçası değil.
+        // The "⚡ 14%" text in the menu bar — this can update even while
+        // the menu is open, since it isn't part of the menu itself.
         statusItem.button?.attributedTitle = attributed(
             " \(headline)%", color: stale ? .disabledControlTextColor : colorFor(headline)
         )
 
-        // Kullanıcı tam o an menüyü açmışsa, altından değiştirmiyoruz.
+        // If the user has the menu open right now, don't change it out from under them.
         guard !shouldSkipRedraw() else { return }
 
-        // NSMenu = tıklayınca açılan dropdown'ın kendisi. Her satır bir
-        // NSMenuItem.
+        // NSMenu is the dropdown itself; each row is an NSMenuItem.
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(withTitle: "Claude Usage Limits", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
 
-        // "for window in snapshot.windows" = JS'teki "for (const w of ...)" ile aynı
         for window in snapshot.windows {
             let reset = resetLabel(
                 percent: window.percent, resetAt: window.resetAt,
@@ -366,12 +351,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         appendFooter(to: menu)
-        // Bu satır menüyü fiilen simgeye bağlıyor — kullanıcı tıklayınca
-        // AppKit bu menu nesnesini otomatik açar.
+        // This line is what actually attaches the menu to the icon —
+        // AppKit opens this menu object automatically when the user clicks.
         statusItem.menu = menu
     }
 
-    // Sunucuya ulaştık ama hiçbir limit bilgisi gelmedi.
+    // We reached the server, but no limit info came back at all.
     private func renderNoData() {
         statusItem.button?.attributedTitle = attributed(" –", color: .disabledControlTextColor)
         guard !shouldSkipRedraw() else { return }
@@ -387,8 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
     }
 
-    // Verinin nereden geldiğini kullanıcıya açıkça söylüyoruz; "kesin mi
-    // tahmin mi" ayrımını görebilmesi önemli.
+    // We tell the user plainly where the data came from — the "exact vs. estimated" distinction matters.
     private func sourceLine(snapshot: UsageSnapshot, age: Double) -> String {
         switch snapshot.source {
         case .api:
@@ -401,13 +385,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // JSON okunamadığında/bozuk olduğunda ve giriş YAPILMIŞKEN gösterilen menü.
+    // The menu shown when the JSON can't be read/is corrupt WHILE signed in.
     private func renderError(_ error: Error) {
-        // Giriş yapılmamışsa ortada bir ARIZA yok — kullanıcı henüz
-        // bağlanmamış demektir. Bunu hata ekranı gibi göstermek, uygulamayı
-        // ilk kez açan birini boşuna telaşlandırıyor. Üstelik bu, Claude
-        // masaüstü uygulaması kurulu olmayan bir kullanıcının göreceği ilk
-        // ekran — yani "bozuk indirdim" izlenimi tam da ilk temasta oluşuyor.
+        // If not signed in, there's no actual FAILURE here — the user just
+        // hasn't connected yet. Showing this as an error screen would
+        // needlessly alarm someone opening the app for the first time.
+        // This is also the very first screen anyone who doesn't have the
+        // Claude desktop app installed will see — so "I downloaded a
+        // broken app" is exactly the impression that would form on first
+        // contact.
         guard SessionStore.sessionKey != nil else {
             renderSignedOut()
             return
@@ -419,8 +405,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(withTitle: "Couldn't read Claude usage data", action: nil, keyEquivalent: "")
-        // error.localizedDescription = Swift'in hatayı otomatik olarak
-        // okunabilir bir cümleye çevirmesi (JS'teki err.message gibi)
         addRow(to: menu, "Error: \(error.localizedDescription)", color: grayText, small: true)
         if let apiError {
             addRow(to: menu, "Live data: \(apiError.localizedDescription)", color: grayText, small: true)
@@ -429,9 +413,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
     }
 
-    // Henüz giriş yapılmamış (ya da oturumu düşmüş) ve gösterilecek yerel
-    // veri de yok. Bu bir hata durumu değil, sadece "başlamaya hazır"
-    // durumu — o yüzden ayrı ve sakin bir ekran gösteriyoruz.
+    // Not signed in yet (or the session dropped) and there's no local data
+    // to show either. This isn't an error state, just a "ready to start"
+    // state — so it gets its own calm screen instead.
     private func renderSignedOut() {
         statusItem.button?.attributedTitle = attributed(" –", color: .disabledControlTextColor)
         guard !shouldSkipRedraw() else { return }
@@ -451,27 +435,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
     }
 
-    // Aynı üç satırı (başlık oluştur, rengini ayarla, menüye ekle) her
-    // yerde tekrar yazmamak için küçük bir yardımcı.
+    // A small helper so we don't repeat the same three lines (build the
+    // title, set its color, add it to the menu) everywhere.
     private func addRow(to menu: NSMenu, _ text: String, color: NSColor, small: Bool = false) {
         let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         item.attributedTitle = attributed(text, color: color, small: small)
         menu.addItem(item)
     }
 
-    // Her menünün altına eklenen ortak kısım.
+    // The shared part appended to the bottom of every menu variant.
     private func appendFooter(to menu: NSMenu) {
         menu.addItem(.separator())
 
         appendOrganizationMenu(to: menu)
 
-        // Giriş durumuna göre tek bir satır: ya giriş teklif ediyoruz ya da
-        // mevcut oturumu kapatma seçeneği sunuyoruz.
-        //
-        // action: #selector(...) demek "bu satıra tıklanınca aşağıdaki
-        // fonksiyonu çalıştır" demek. "target = self" ise "bu fonksiyonu
-        // BENDE (bu AppDelegate nesnesinde) ara" demek — AppKit'in eski ama
-        // hâlâ kullanılan "target-action" tıklama deseni.
+        // A single row depending on sign-in state: either offer to sign in, or offer to sign out.
         let signedIn = SessionStore.sessionKey != nil
         let authItem = NSMenuItem(
             title: signedIn ? "Sign Out" : "Sign In with Claude…",
@@ -483,25 +461,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         appendStartAtLoginItem(to: menu)
 
-        // "Open Claude" yalnızca Claude masaüstü uygulaması KURULUYSA
-        // gösteriliyor. Kurulu değilken bu satır tıklanınca hiçbir şey
-        // olmuyordu — ve bu, uygulamayı GitHub'dan indiren birinin çok
-        // muhtemel durumu (Claude masaüstü şart değil, giriş yeterli).
+        // "Open Claude" is only shown if the Claude desktop app is actually
+        // installed. It used to always be there, including for people who
+        // never installed the desktop app — clicking it did nothing, and
+        // that's exactly the likely position of anyone installing from a
+        // release (the desktop app isn't required, signing in is enough).
         if claudeAppURL != nil {
             let openItem = NSMenuItem(title: "Open Claude", action: #selector(openClaude), keyEquivalent: "")
             openItem.target = self
             menu.addItem(openItem)
         }
 
-        // NSApplication.terminate zaten AppKit'in hazır "uygulamayı kapat"
-        // fonksiyonu, kendimiz yazmamıza gerek yok. keyEquivalent: "q" ise
-        // ⌘Q kısayolunu bu menü öğesine bağlıyor.
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
-    // Birden fazla organizasyon varsa hangisine baktığımızı seçilebilir
-    // yapıyoruz. Tek organizasyon varsa (kullanıcıların çoğu) bu menüyü hiç
-    // göstermiyoruz — gereksiz kalabalık olurdu.
+    // If there's more than one organization, make it selectable which one
+    // we're looking at. With a single organization (most users) we skip
+    // this menu entirely — it would just be unnecessary clutter.
     private func appendOrganizationMenu(to menu: NSMenu) {
         guard organizations.count > 1 else { return }
 
@@ -511,10 +487,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for org in organizations {
             let item = NSMenuItem(title: org.name, action: #selector(selectOrganization(_:)), keyEquivalent: "")
             item.target = self
-            // representedObject = menü öğesine iliştirilen serbest veri;
-            // tıklanınca hangi organizasyonun seçildiğini buradan okuyoruz.
+            // representedObject holds arbitrary data attached to the menu
+            // item; we read the selected organization's id from here when clicked.
             item.representedObject = org.uuid
-            item.state = (org.uuid == SessionStore.orgId) ? .on : .off  // seçili olana tik
+            item.state = (org.uuid == SessionStore.orgId) ? .on : .off  // checkmark the selected one
             submenu.addItem(item)
         }
 
@@ -522,13 +498,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(parent)
     }
 
-    // "Girişte başlat" anahtarı. SMAppService (macOS 13+), kullanıcının
-    // Sistem Ayarları > Genel > Giriş Öğeleri listesine uygulamayı ekler —
-    // yani kullanıcının oraya elle gidip uğraşmasına gerek kalmıyor.
+    // The "start at login" toggle. SMAppService (macOS 13+) adds the app to
+    // System Settings > General > Login Items on the user's behalf — no
+    // need for them to go there manually.
     private func appendStartAtLoginItem(to menu: NSMenu) {
-        // SMAppService yalnızca gerçek bir .app paketinde çalışır; kaynaktan
-        // doğrudan çalıştırılan çıplak ikilide bu seçeneği hiç göstermiyoruz,
-        // yoksa tıklayınca sessizce hata verirdi.
+        // SMAppService only works from inside a real .app bundle; we don't
+        // show this option at all for a bare binary run directly from
+        // source, since clicking it would silently fail.
         guard isBundledApp else { return }
 
         let item = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin), keyEquivalent: "")
@@ -549,30 +525,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SMAppService.mainApp.status == .enabled
     }
 
-    // MARK: - Menü açık/kapalı takibi (NSMenuDelegate)
+    // MARK: - Menu open/close tracking (NSMenuDelegate)
 
     func menuWillOpen(_ menu: NSMenu) { menuIsOpen = true }
 
     func menuDidClose(_ menu: NSMenu) {
         menuIsOpen = false
-        // Menü kapanınca, açıkken ertelediğimiz güncellemeyi hemen uygula.
+        // Once the menu closes, apply the update we deferred while it was open.
         refresh()
     }
 
-    // MARK: - Tıklama davranışları
+    // MARK: - Click behavior
 
-    // "@objc" = bu fonksiyonu Objective-C çalışma zamanına (AppKit'in
-    // altyapısına) görünür kıl demek. #selector(...) ile bir fonksiyona
-    // "isimle" referans verebilmek için Swift'te bu işaretin olması şart
-    // — yoksa derleyici "böyle bir fonksiyon bulamıyorum" hatası verir.
     @objc private func signIn() {
         loginWindow.present { [weak self] sessionKey in
             SessionStore.save(sessionKey: sessionKey)
-            // Farklı bir hesapla girilmiş olabilir; eski hesabın sıfırlanma
-            // zamanlarını taşımayalım.
+            // This may be a different account — don't carry over the previous account's reset times.
             SessionStore.clearResetCache()
-            // Farklı bir hesapla girilmiş olabilir; önbellekteki org
-            // kimliği ve listesi artık geçersiz sayılmalı.
+            // This may be a different account — the cached org id/list should now be considered stale.
             SessionStore.orgId = nil
             self?.organizations = []
             self?.organizationsLoadedAt = nil
@@ -590,26 +560,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         organizationsLoadedAt = nil
         pauseUntil = nil
         apiError = nil
-        needsReauth = false  // kullanıcı kendi isteğiyle çıktı, uyarıya gerek yok
-        lastSnapshot = nil   // eski canlı veri bir daha çizilmesin
+        needsReauth = false  // the user signed out on their own, no warning needed
+        lastSnapshot = nil   // don't let stale live data get redrawn again
 
-        // Keychain'i silmek yetmiyor: WebKit'in kalıcı deposundaki claude.ai
-        // oturum çerezi de gitmeli, yoksa "çıkış yaptım" demek gerçekte
-        // doğru olmaz (bkz. LoginWindowController.clearStoredWebSession).
+        // Clearing the Keychain isn't enough: WebKit's persistent store
+        // still holds the claude.ai session cookie, otherwise "signed out"
+        // wouldn't actually be true (see LoginWindowController.clearStoredWebSession).
         LoginWindowController.clearStoredWebSession { [weak self] in
             self?.refresh(force: true)
         }
-        refresh(force: true)  // temizlik bitmeden de arayüz hemen güncellensin
+        refresh(force: true)  // update the UI right away, don't wait for cleanup to finish
     }
 
     @objc private func selectOrganization(_ sender: NSMenuItem) {
         guard let uuid = sender.representedObject as? String else { return }
         SessionStore.orgId = uuid
-        // Tercihi ayrıca kaydediyoruz: orgId hata kurtarmasında
-        // temizlenebiliyor, ama kullanıcının seçimi kalıcı olmalı.
+        // Also save this as an explicit preference: orgId can get cleared
+        // during error recovery, but the user's choice should persist.
         SessionStore.preferredOrgId = uuid
-        lastSnapshot = nil  // artık başka bir organizasyona bakıyoruz
-        // Önbellekteki sıfırlanma zamanları ÖNCEKİ organizasyona ait.
+        lastSnapshot = nil  // now looking at a different organization
+        // Cached reset times belong to the PREVIOUS organization.
         SessionStore.clearResetCache()
         refresh(force: true)
     }
@@ -625,21 +595,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             startAtLoginError = nil
         } catch {
-            // Uygulamayı kırmıyoruz ama sessizce de geçmiyoruz — kullanıcı
-            // tikin neden değişmediğini görmeli ve elle ekleyebileceğini
-            // bilmeli.
+            // We don't break the app, but we don't stay silent either — the
+            // user should see why the checkbox didn't change and know they
+            // can add it manually.
             log("start at login failed: \(error.localizedDescription)")
             startAtLoginError = "Could not change — add it in System Settings › General › Login Items"
         }
-        // Kullanıcı bu tike BİZZAT az önce tıkladı — menuIsOpen bayrağı
-        // yüzünden güncellemenin sessizce atlanmasını istemiyoruz.
+        // The user JUST clicked this checkbox themselves — we don't want
+        // the update silently skipped because of the menuIsOpen flag.
         bypassMenuOpenGuardOnce = true
-        redraw()  // sadece menüdeki tik işaretini güncelle — ağa gitmeye gerek yok
+        redraw()  // just refresh the checkmark in the menu — no need to hit the network
     }
 
-    // Claude masaüstü uygulamasının yeri — kurulu değilse nil.
-    // "bundle identifier" ile arıyoruz, böylece /Applications dışına
-    // kurulmuş olsa bile bulunur.
+    // Where the Claude desktop app lives — nil if it isn't installed. We
+    // look it up by bundle identifier so it's found even if installed
+    // somewhere other than /Applications.
     private var claudeAppURL: URL? {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.anthropic.claudefordesktop")
     }

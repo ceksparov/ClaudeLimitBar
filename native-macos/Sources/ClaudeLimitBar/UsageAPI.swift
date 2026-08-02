@@ -1,27 +1,21 @@
 import Foundation
 
-// claude.ai'nin, kullanim ayarlari sayfasinin kendi kullandigi ic API'sine
-// konusan istemci. Yerel dosyaya gore buyuk avantaji: sifirlanma zamanini
-// TAHMIN etmek zorunda degiliz, sunucu bize kesin zamani soyluyor.
+// A client that talks to claude.ai's internal API — the same one its own
+// usage settings page uses. Its big advantage over the local file: we don't
+// have to ESTIMATE the reset time, the server tells us the exact moment.
 //
-// Not: Bu, Anthropic'in resmi olarak dokumante ettigi bir API degil —
-// tarayicidaki sayfanin kullandigi ic ucnokta. Degisirse uygulama
-// yerel dosyaya geri duser (bkz. AppDelegate.refresh).
-
-// Hatalari kendi turumuzde toplamak, cagiran tarafin "ne oldu"yu net
-// ayirt edebilmesini saglar — ozellikle "oturum dustu" durumunu, cunku
-// o durumda kullaniciya tekrar giris yaptirmamiz gerekiyor.
-// LocalizedError'a uymak, error.localizedDescription cagrildiginda
-// asagidaki Turkce metinlerin cikmasini saglar.
+// Note: this is not an API Anthropic officially documents — it's the
+// internal endpoint the browser page itself calls. If it ever changes, the
+// app falls back to the local file (see AppDelegate.refresh).
 enum APIError: LocalizedError {
     case notSignedIn
     case unauthorized
     case badStatus(Int)
     case noOrganization
-    // Sunucu "cok sik istek attin" dedi. retryAfter, sunucunun onerdigi
-    // bekleme suresi (Retry-After basligi); vermemisse nil.
+    // The server said "you're requesting too often". retryAfter is the
+    // server's suggested wait time (Retry-After header); nil if it didn't give one.
     case rateLimited(retryAfter: TimeInterval?)
-    // Cloudflare'in bot kontrolu. Oturumla ilgisi YOK, gecici bir engel.
+    // Cloudflare's bot check. Has NOTHING to do with the session — a temporary block.
     case blocked
 
     var errorDescription: String? {
@@ -39,10 +33,9 @@ enum APIError: LocalizedError {
 enum UsageAPI {
     private static let host = "https://claude.ai"
 
-    // URLSession.shared kendi cerez deposunu kullanir ve bizim elle
-    // yazdigimiz Cookie basligini ezebilir. Bu yuzden cerezleri tamamen
-    // kapali, kendi oturumumuzu kuruyoruz — tek kimlik kaynagi
-    // Keychain'deki sessionKey olsun.
+    // URLSession.shared uses its own cookie store and could override our
+    // manually-set Cookie header. So we disable cookies entirely and manage
+    // our own session — the Keychain's sessionKey is the single source of truth.
     private static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
@@ -51,12 +44,7 @@ enum UsageAPI {
         return URLSession(configuration: config)
     }()
 
-    // MARK: - Sunucudan gelen JSON'un sekli
-    //
-    // Asagidaki struct'lar yalnizca bu dosyada kullanildigi icin "private".
-    // JSONDecoder'a .convertFromSnakeCase diyecegiz; o sayede sunucudaki
-    // "five_hour" alani buradaki "fiveHour" ozelligine otomatik eslesiyor
-    // (Swift'in isimlendirme adeti camelCase oldugu icin bu daha okunakli).
+    // MARK: - Shape of the server's JSON
 
     private struct APIWindow: Decodable {
         let utilization: Double
@@ -74,25 +62,21 @@ enum UsageAPI {
         let capabilities: [String]?
     }
 
-    // Menude organizasyon secimi gosterebilmek icin disariya actigimiz
-    // sadelestirilmis tur (bkz. AppDelegate.appendOrganizationMenu).
+    // The simplified type we expose outward so the menu can show an
+    // organization picker (see AppDelegate.appendOrganizationMenu).
     struct Organization {
         let uuid: String
         let name: String
     }
 
-    // MARK: - Genel istek yardimcisi
-    //
-    // "<T: Decodable>" = generic (jenerik) fonksiyon: hangi turu istersen
-    // onu cozup dondururum demek. Boylece hem organizasyon listesi hem de
-    // kullanim verisi icin ayni fonksiyonu kullanabiliyoruz.
-    // "async throws" = bu fonksiyon beklemeli (ag istegi) ve hata firlatabilir.
+    // MARK: - Generic request helper
+
     private static func get<T: Decodable>(_ path: String, sessionKey: String) async throws -> T {
         var request = URLRequest(url: URL(string: host + path)!)
         request.setValue("sessionKey=\(sessionKey)", forHTTPHeaderField: "Cookie")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        // Sunucu, tarayici disindan gelen isteklere farkli davranabildigi
-        // icin normal bir tarayici kimligi gonderiyoruz.
+        // The server can behave differently for requests that don't look
+        // like they came from a browser, so we send a normal browser identity.
         request.setValue(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                 + "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -102,34 +86,34 @@ enum UsageAPI {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw APIError.badStatus(0) }
 
-        // 429 = "cok sik istek atiyorsun". Bunu ayirt etmemiz sart: ayni
-        // hizda istek atmaya devam edersek engel uzayabilir. Cagiran taraf
-        // bunu gorup bir sure hic istek atmamali (bkz. AppDelegate.pauseUntil).
+        // 429 = "you're requesting too often". We need to recognize this
+        // distinctly: continuing at the same rate could extend the block.
+        // The caller should see this and stop sending requests for a while
+        // (see AppDelegate.pauseUntil).
         if http.statusCode == 429 {
             let retryAfter = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(TimeInterval.init)
             throw APIError.rateLimited(retryAfter: retryAfter)
         }
 
-        // claude.ai'nin onunde Cloudflare var. Bot kontrolu yaptiginda
-        // 403 + HTML bir sayfa donuyor ("Just a moment..."), gercek API ise
-        // her zaman JSON doner.
+        // claude.ai sits behind Cloudflare. When its bot check kicks in, it
+        // returns 403 with an HTML challenge page ("Just a moment..."),
+        // while the real API always returns JSON.
         //
-        // Bu ayrim onemli cunku 403'u kosulsuz "oturum gecersiz" saymak,
-        // gecici bir bot kontrolunde kullanicinin GAYET GECERLI oturumunu
-        // silmemize yol acardi. Uygulamanin kendi istemcisi su an bu
-        // kontrole takilmiyor (olculdu; takilan curl idi) — yani bu bilinen
-        // bir arizanin duzeltmesi degil, ileride takilirsa oturumu yok
-        // etmemek icin konulmus bir koruma.
+        // This distinction matters because treating every 403 as "session
+        // invalid" would delete a user's PERFECTLY VALID session during a
+        // temporary bot check. This app's own client isn't currently
+        // hitting that check (verified — it was curl that triggered it), so
+        // this isn't a fix for a known failure, it's a safeguard against
+        // destroying a session if it ever does happen.
         //
-        // Onceki surumde bu ayrimi "Content-Type json degil" diye TERSTEN
-        // (negatif) kuruyorduk — yani "json degilse Cloudflare'dir" diye
-        // varsayiyorduk. Sorun su: Cloudflare (ya da onundeki baska bir
-        // WAF/CDN katmani) bir gun engelleme sayfasini "application/json"
-        // Content-Type'iyla donerse (bazi saglayicilarda XHR istekleri icin
-        // boyle olur), bu kontrol onu YANLISLIKLA gercek bir "oturum bitti"
-        // yaniti sanir ve gecerli anahtari siler. Bunun yerine Cloudflare'in
-        // gercekten biraktigi izlere (govde metni ya da kendi basligi)
-        // POZITIF olarak bakiyoruz — daha dar ama daha dogru bir kontrol.
+        // A previous version built this split the OTHER way around — as
+        // "if it's not JSON, assume it's Cloudflare". The problem: if
+        // Cloudflare (or whatever WAF/CDN sits in front of it) ever serves
+        // a challenge page with an "application/json" content type (some
+        // providers do this for XHR requests), that check would mistake it
+        // for a genuine "session expired" response and delete a valid key.
+        // Instead we look POSITIVELY for actual signs Cloudflare left behind
+        // (body text or its own header) — narrower, but more accurate.
         let bodyText = String(data: data, encoding: .utf8) ?? ""
         let looksLikeCloudflareChallenge =
             http.value(forHTTPHeaderField: "cf-mitigated") != nil
@@ -140,7 +124,7 @@ enum UsageAPI {
             throw APIError.blocked
         }
 
-        // Sadece sunucunun GERCEK yaniti kimlik hatasi sayilir.
+        // Only the server's ACTUAL response counts as an auth failure.
         if http.statusCode == 401 || http.statusCode == 403 { throw APIError.unauthorized }
         guard (200..<300).contains(http.statusCode) else { throw APIError.badStatus(http.statusCode) }
 
@@ -149,23 +133,22 @@ enum UsageAPI {
         return try decoder.decode(T.self, from: data)
     }
 
-    // MARK: - Organizasyon kimligi
+    // MARK: - Organization id
     //
-    // Kullanim adresi /api/organizations/{ORG_ID}/usage seklinde, yani org
-    // kimligi zorunlu. Bunu her seferinde cekmemek icin UserDefaults'ta
-    // onbellege aliyoruz.
+    // The usage endpoint is /api/organizations/{ORG_ID}/usage, so an org id
+    // is required. We cache it in UserDefaults so we don't fetch it every time.
     private static func organizationId(sessionKey: String) async throws -> String {
         if let cached = SessionStore.orgId { return cached }
 
         let orgs: [APIOrganization] = try await get("/api/organizations", sessionKey: sessionKey)
 
-        // Sirasiyla: kullanicinin actikca sectigi (hala erisimi varsa),
-        // sonra sohbet yetenegi olan ilki, sonra listedeki ilki.
+        // In order: the one the user explicitly picked (if they still have
+        // access), then the first with chat capability, then just the first one.
         //
-        // Kullanicinin secimini ilk sirada denemek onemli: orgId hata
-        // kurtarmasi sirasinda temizlenebiliyor ve o zaman buraya geri
-        // geliyoruz — tercihi burada hatirlamazsak kullanicinin secimi her
-        // gecici hatada sessizce kaybolurdu.
+        // Trying the user's choice first matters: orgId can get cleared
+        // during error recovery, landing us back here — if we don't
+        // remember the preference here, the user's choice would silently
+        // vanish on every transient error.
         let chosen = orgs.first { $0.uuid == SessionStore.preferredOrgId }
             ?? orgs.first { $0.capabilities?.contains("chat") == true }
             ?? orgs.first
@@ -175,25 +158,26 @@ enum UsageAPI {
         return uuid
     }
 
-    // Bir anahtarin durumu UC ihtimalli — ve bu ayrim onemli. "Gecersiz" ile
-    // "su an ulasamadim" ayni sey degil: ikisini birlestirirsek, giris
-    // aninda bir saniyelik internet kesintisi kullanicinin GERCEK anahtarini
-    // kalici olarak "gecersiz" diye isaretler ve giris bir daha hic
-    // tamamlanmaz. Bu yuzden sadece sunucunun acikca reddettigi durumu
-    // gecersiz sayiyoruz.
+    // A key's status has THREE possible outcomes, and the distinction
+    // matters. "Invalid" and "currently unreachable" are not the same
+    // thing: conflating them would mean a one-second internet blip during
+    // sign-in permanently marks the user's REAL key as "invalid" and
+    // sign-in never completes. So we only treat an explicit server
+    // rejection as invalid.
     enum KeyCheck {
-        case valid        // sunucu kabul etti
-        case invalid      // sunucu acikca reddetti (401/403)
-        case unreachable  // sonuc belirsiz — ag hatasi, zaman asimi vs.
+        case valid        // the server accepted it
+        case invalid      // the server explicitly rejected it (401/403)
+        case unreachable  // inconclusive — network error, timeout, etc.
     }
 
-    // Bir sessionKey gercekten calisiyor mu? Giris penceresi bunu, yakaladigi
-    // cerezi kabul etmeden once sormak icin kullaniyor.
+    // Does a sessionKey actually work? The login window uses this to check
+    // a cookie it captured before accepting it.
     //
-    // Neden gerekli: giris akisi sirasinda claude.ai, henuz gecerli olmayan
-    // ya da eski bir oturumdan kalma bir sessionKey cerezi birakmis olabilir.
-    // "Cerez var mi" diye bakmak bu yuzden yeterli degil — tek kesin olcut,
-    // o anahtarla gercekten bir istek atip sonucuna bakmak.
+    // Why this is needed: during sign-in, claude.ai may have left behind a
+    // sessionKey cookie that isn't valid yet, or is left over from an old
+    // session. So just checking "does a cookie exist" isn't enough — the
+    // only reliable test is to actually make an API request with it and
+    // look at the result.
     static func check(sessionKey: String) async -> KeyCheck {
         do {
             let orgs: [APIOrganization] = try await get("/api/organizations", sessionKey: sessionKey)
@@ -201,23 +185,23 @@ enum UsageAPI {
         } catch APIError.unauthorized {
             return .invalid
         } catch {
-            // Ag hatasi, zaman asimi, beklenmedik yanit bicimi… Hepsinde
-            // "bilmiyorum" deyip tekrar denemeyi tercih ediyoruz.
+            // Network error, timeout, unexpected response shape... in all
+            // of these we prefer to say "I don't know" and retry.
             return .unreachable
         }
     }
 
-    // Hesaba bagli tum organizasyonlar. Cogu kullanicida tek tane olur;
-    // Team/Enterprise hesaplarinda birden fazla olabilir ve o zaman
-    // kullanicinin hangisine baktigini secebilmesi gerekir.
+    // All organizations tied to the account. Most users have just one;
+    // Team/Enterprise accounts can have several, in which case the user
+    // needs to be able to pick which one they're looking at.
     static func organizations() async throws -> [Organization] {
         guard let key = SessionStore.sessionKey else { throw APIError.notSignedIn }
         let raw: [APIOrganization] = try await get("/api/organizations", sessionKey: key)
-        // Isim bos gelirse kimligi gosteriyoruz; menude bos satir olmasin.
+        // If the name comes back empty, show the id instead so the menu doesn't have a blank row.
         return raw.map { Organization(uuid: $0.uuid, name: $0.name ?? $0.uuid) }
     }
 
-    // MARK: - Disariya acilan fonksiyonlar
+    // MARK: - Public entry points
 
     static func fetchSnapshot() async throws -> UsageSnapshot {
         guard let key = SessionStore.sessionKey else { throw APIError.notSignedIn }
@@ -225,13 +209,13 @@ enum UsageAPI {
         do {
             return try await snapshot(sessionKey: key)
         } catch APIError.unauthorized {
-            // 403 iki ayri seyi birden anlatiyor olabilir: "oturumun
-            // gecersiz" ya da "bu organizasyona erisimin yok" — claude.ai
-            // ikisini de 403 donuyor, ayirt edemiyoruz. Onbellekteki org
-            // kimligi bayatlamis olabilecegi icin (kullanici bir takimdan
-            // cikarilmis olabilir) once SADECE onu atip bir kez daha
-            // deniyoruz. Boylece cozumu oturumu kapatmak olmayan bir sorun
-            // yuzunden kullaniciyi bosuna yeniden giris yapmaya zorlamiyoruz.
+            // A 403 can mean one of two different things: "your session is
+            // invalid" or "you don't have access to this organization" —
+            // claude.ai returns 403 for both, we can't tell them apart.
+            // Since the cached org id could be stale (the user may have
+            // been removed from a team), we first drop JUST that and try
+            // once more. This avoids forcing an unnecessary re-login when
+            // the actual problem isn't the session at all.
             guard SessionStore.orgId != nil else { throw APIError.unauthorized }
             SessionStore.orgId = nil
             return try await snapshot(sessionKey: key)
@@ -242,10 +226,10 @@ enum UsageAPI {
         let org = try await organizationId(sessionKey: key)
         let usage: APIUsage = try await get("/api/organizations/\(org)/usage", sessionKey: key)
 
-        // Sunucu her pencereyi ayri alanda veriyor; ikisini de ayni
-        // "Window" sekline cevirip menunun bekledigi sirada diziyoruz.
-        // "compactMap { $0 }" = listedeki nil'leri atip kalanlari birak
-        // (ornegin hesapta haftalik limit tanimli degilse o alan nil gelir).
+        // The server gives each window in its own field; convert both into
+        // the same "Window" shape and order them the way the menu expects.
+        // compactMap drops any nils (e.g. if the account has no weekly
+        // limit defined, that field comes back nil).
         let windows: [UsageSnapshot.Window] = [
             window(from: usage.fiveHour, id: "fiveHour", label: "Current session"),
             window(from: usage.sevenDay, id: "sevenDay", label: "Weekly (7 days)"),
@@ -258,25 +242,24 @@ enum UsageAPI {
         guard let raw else { return nil }
         let resetAt = raw.resetsAt.flatMap(parseTimestamp)
 
-        // Kesin zamani sakliyoruz: API'ye ulasamadigimiz bir anda yerel
-        // dosyadan tahmin yurutmek yerine bunu kullanacagiz
-        // (bkz. SessionStore.cachedResetAt).
+        // Cache the exact time: if we can't reach the API at some point,
+        // we'll use this instead of estimating from the local file (see
+        // SessionStore.cachedResetAt).
         SessionStore.setCachedResetAt(id, resetAt)
 
         return UsageSnapshot.Window(
             label: label,
             percent: Int(raw.utilization.rounded()),
             resetAt: resetAt,
-            resetIsEstimate: false  // API kesin zamani veriyor, tahmin degil
+            resetIsEstimate: false  // the API gives an exact time, not an estimate
         )
     }
 
-    // Sunucu zamani "2026-07-31T11:10:00.271661+00:00" seklinde gonderiyor.
-    // Saniyenin kesirli kismi 6 haneli; Foundation'in hazir ISO8601
-    // cozumleyicisi standart olarak 3 hane bekledigi icin bu kadar haneyle
-    // bogulabiliyor. Saniye altı hassasiyet bize zaten gereksiz (menude
-    // "4s 32dk" yaziyoruz), o yuzden kesirli kismi tamamen atip
-    // cozumluyoruz — en dayanikli yol bu.
+    // The server sends time as "2026-07-31T11:10:00.271661+00:00". The
+    // fractional seconds are 6 digits; Foundation's built-in ISO8601 parser
+    // expects 3 by default and chokes on this. Sub-second precision is
+    // unnecessary for us anyway (we show "4h 32m" in the menu), so we strip
+    // the fractional part entirely before parsing — the most robust approach.
     static func parseTimestamp(_ text: String) -> Date? {
         var cleaned = text
         if let dot = cleaned.firstIndex(of: "."),

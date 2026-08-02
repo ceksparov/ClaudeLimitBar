@@ -1,26 +1,21 @@
 import Foundation
 import Security
 
-// sessionKey, Claude hesabina tam erisim veren gercek bir kimlik bilgisi —
-// bunu duz bir dosyaya (ornegin .env'e) yazmak, makineye erisen herkesin
-// hesabi ele gecirebilmesi demek olurdu. macOS Keychain ise isletim
-// sisteminin sifreli kasasi: veriyi diskte sifreli tutar ve sadece izin
-// verilen uygulamaya geri verir. Bu yuzden anahtari oraya koyuyoruz.
+// sessionKey is a real credential that grants full access to the Claude
+// account — writing it to a plain file (like .env) would mean anyone with
+// access to the machine could take over the account. The macOS Keychain is
+// the OS's encrypted vault: it keeps data encrypted on disk and only hands
+// it back to the app that's allowed to read it. That's why we store the key there.
 //
-// "enum" burada ilginc bir Swift deyimi: icinde hic "case" yok, sadece
-// static fonksiyonlar var. Bunun sebebi, bu turden yanlislikla bir ornek
-// (instance) olusturulamamasi — yani "SessionStore()" yazilamaz. Sadece
-// fonksiyonlari bir arada tutan bir isim alani (namespace) olarak duruyor.
+// This enum has no cases, only static functions — that's deliberate, so it
+// can't accidentally be instantiated (`SessionStore()` isn't valid). It's
+// just a namespace grouping related functions together.
 enum SessionStore {
-    // Keychain'de kayitlar "service + account" ikilisiyle adreslenir;
-    // bunlar bizim kaydimizi baskalarininkinden ayiran etiketler.
+    // Keychain entries are addressed by a "service + account" pair; these
+    // labels distinguish our entry from everyone else's.
     private static let service = "ClaudeLimitBar"
     private static let account = "sessionKey"
 
-    // Keychain API'si Objective-C'den de eski, C tabanli bir arayuz
-    // (Security framework). Bu yuzden parametreleri tek tek vermek yerine
-    // bir sozlukte toplayip fonksiyona veriyoruz. kSecClassGenericPassword
-    // = "bu bir genel amacli parola kaydi" demek.
     private static var baseQuery: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -29,17 +24,11 @@ enum SessionStore {
         ]
     }
 
-    // "computed property" (hesaplanan ozellik): disaridan bir degiskenmis
-    // gibi "SessionStore.sessionKey" diye okunur, ama her okundugunda
-    // asagidaki kod calisip Keychain'e gider.
     static var sessionKey: String? {
         var query = baseQuery
-        query[kSecReturnData as String] = true      // sadece varligini degil, degerini de dondur
+        query[kSecReturnData as String] = true      // return the value, not just whether it exists
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
-        // "var item: CFTypeRef?" + "&item" — C tarzi "sonucu su adrese yaz"
-        // deseni. Swift'te "&" isareti, degiskeni fonksiyona degistirilebilir
-        // sekilde vermek demek.
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data,
@@ -50,19 +39,19 @@ enum SessionStore {
     }
 
     static func save(sessionKey: String) {
-        // Keychain "ayni kaydi guncelle" icin ayri bir fonksiyon ister;
-        // once silip sonra eklemek hem daha kisa hem de daha az hata riskli.
+        // The Keychain requires a separate call to "update" an existing
+        // entry; deleting then adding is shorter and less error-prone.
         SecItemDelete(baseQuery as CFDictionary)
 
         var query = baseQuery
         query[kSecValueData as String] = Data(sessionKey.utf8)
-        // kSecAttrAccessibleWhenUnlocked = anahtar SADECE kullanici cihaza
-        // giris yapmisken okunabilsin. Varsayilana birakmak yerine bunu
-        // acikca yaziyoruz ki niyet kodda gorunur olsun.
+        // kSecAttrAccessibleWhenUnlocked = the key can only be read while
+        // the user's device is unlocked. Written explicitly instead of
+        // relying on the default, so the intent is visible in the code.
         query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
-        // Synchronizable = false: bu anahtar iCloud Keychain uzerinden
-        // diger cihazlara YAYILMASIN. Tek bir makineye ait, kisa omurlu bir
-        // oturum bilgisi; baska cihazlara kopyalanmasi gereksiz bir risk.
+        // Synchronizable = false: this key must NOT sync to other devices
+        // via iCloud Keychain. It belongs to a single machine and is
+        // short-lived; copying it elsewhere would be an unnecessary risk.
         query[kSecAttrSynchronizable as String] = false
         SecItemAdd(query as CFDictionary, nil)
     }
@@ -71,46 +60,46 @@ enum SessionStore {
         SecItemDelete(baseQuery as CFDictionary)
     }
 
-    // Organizasyon kimligi gizli bir bilgi degil (sadece bir UUID), o yuzden
-    // Keychain'e koymaya gerek yok. UserDefaults, macOS'un basit ayar
-    // deposu — tarayicidaki localStorage'in karsiligi gibi dusunulebilir.
-    // Bunu onbellege aliyoruz ki her kullanim sorgusunda organizasyon
-    // listesini bastan cekmek zorunda kalmayalim.
+    // The organization id isn't sensitive (just a UUID), so it doesn't need
+    // the Keychain. UserDefaults is macOS's simple settings store — think
+    // of it as the equivalent of a browser's localStorage. We cache this so
+    // we don't have to re-fetch the organization list on every usage query.
     static var orgId: String? {
         get { UserDefaults.standard.string(forKey: "orgId") }
         set { UserDefaults.standard.set(newValue, forKey: "orgId") }
     }
 
-    // Kullanicinin menuden ACIKCA sectigi organizasyon.
+    // The organization the user EXPLICITLY picked from the menu.
     //
-    // orgId'den ayri tutuyoruz cunku orgId, hata kurtarmasi sirasinda
-    // otomatik olarak temizlenebiliyor (bayat olabilecegi varsayimiyla).
-    // Kullanicinin secimi ise bir tercih — gecici bir sunucu hatasi yuzunden
-    // sessizce kaybolmamali. Erisim gercekten kaybedilmisse zaten listede
-    // bulunamaz ve otomatik secime dusulur.
+    // Kept separate from orgId because orgId can get cleared automatically
+    // during error recovery (on the assumption it might be stale). The
+    // user's choice, on the other hand, is a preference — it shouldn't
+    // silently disappear because of a transient server error. If access is
+    // genuinely lost, it simply won't be found in the list and the
+    // automatic pick takes over.
     static var preferredOrgId: String? {
         get { UserDefaults.standard.string(forKey: "preferredOrgId") }
         set { UserDefaults.standard.set(newValue, forKey: "preferredOrgId") }
     }
 
-    // API'den ogrendigimiz KESIN sifirlanma zamanlarini sakliyoruz.
+    // Caches the EXACT reset times we learned from the API.
     //
-    // Neden: sifirlanma zamani mutlak bir an ("31 Temmuz 19:10"). Bir kez
-    // ogrendikten sonra internet gitse de, oturum dusse de o an degismez —
-    // gecene kadar dogru kalir. Onbelleklemezsek, API'ye ulasamadigimiz
-    // anda bu kesin bilgiyi atip yerel dosyadan tahmin yurutmeye
-    // basliyorduk; kullaniciya gercekle uyusmayan bir sayi gostermenin
-    // sebebi tam olarak buydu.
+    // Why: a reset time is an absolute moment ("July 31, 7:10 PM"). Once
+    // learned, it doesn't change even if the internet drops or the session
+    // expires — it stays correct until it passes. Without caching it, the
+    // moment we couldn't reach the API we'd throw away this exact
+    // information and fall back to estimating from the local file; that's
+    // exactly why the app used to show a number that didn't match reality.
     static func cachedResetAt(_ id: String) -> Date? {
         let seconds = UserDefaults.standard.double(forKey: "resetAt.\(id)")
         guard seconds > 0 else { return nil }
         return Date(timeIntervalSince1970: seconds)
     }
 
-    // Bakilan hesap ya da organizasyon degistiginde cagrilir. Onbellekteki
-    // zamanlar ONCEKI organizasyona ait; temizlemezsek, API'ye ulasilamadigi
-    // bir anda baska bir organizasyonun sifirlanma zamanini "kesin" diye
-    // gosteririz.
+    // Called when the viewed account or organization changes. Cached times
+    // belong to the PREVIOUS organization; if we don't clear them, we might
+    // show another organization's reset time as "exact" at a moment when
+    // the API can't be reached.
     static func clearResetCache() {
         for id in ["fiveHour", "sevenDay"] { setCachedResetAt(id, nil) }
     }

@@ -1,25 +1,25 @@
 import Foundation
 
-// Artik verinin iki kaynagi var: canli API (claude.ai) ve masaustu
-// uygulamasinin yerel dosyasi. Bu struct, ikisinden gelen veriyi AYNI
-// sekle sokuyor. Boylece menuyu cizen kod "bu veri nereden geldi" diye
-// hic dusunmek zorunda kalmiyor — tek bir cizim mantigi her iki kaynak
-// icin de calisiyor. (Yazilimda buna "adapter" ya da "ortak model"
-// yaklasimi denir: farkli kaynaklari tek bir ic temsile cevirmek.)
+// There are now two sources of data: the live API (claude.ai) and the
+// desktop app's local file. This struct normalizes both into the SAME
+// shape, so the code that draws the menu never has to think about "where
+// did this data come from" — a single rendering path works for both
+// sources. (In software this is usually called an "adapter" or "common
+// model" approach: converting different sources into one internal representation.)
 struct UsageSnapshot {
     enum Source {
-        case api        // claude.ai'den canli cekildi — sifirlanma zamani KESIN
-        case localFile  // masaustu uygulamasinin dosyasindan — sifirlanma TAHMINI
+        case api        // fetched live from claude.ai — reset time is EXACT
+        case localFile  // from the desktop app's file — reset time is an ESTIMATE
     }
 
     struct Window {
-        let label: String       // "5 Saatlik Oturum" gibi menuye yazilacak isim
-        let percent: Int        // kullanim yuzdesi
-        let resetAt: Date?      // sifirlanma ani; bilinmiyorsa nil
-        let resetIsEstimate: Bool  // true ise kullaniciya "(tahmini)" diye belirtiyoruz
+        let label: String       // name shown in the menu, e.g. "Current session"
+        let percent: Int        // usage percentage
+        let resetAt: Date?      // reset moment; nil if unknown
+        let resetIsEstimate: Bool  // true means we tell the user it's "(estimated)"
     }
 
     let windows: [Window]
-    let capturedAt: Date    // bu verinin uretildigi an (yerel dosyada eski olabilir)
+    let capturedAt: Date    // when this data was produced (can be old for the local file)
     let source: Source
 }
