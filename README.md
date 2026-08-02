@@ -47,6 +47,13 @@ cd native-macos
 Your session key is stored only in the macOS Keychain, never logged or
 written to disk in plain text.
 
+## Contributing
+
+Bug reports, feature requests, and PRs are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for how the project is laid out, how to
+build and test it, and the code style it follows. Adding a new language is
+one of the most useful things you could contribute (see the note in there).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
