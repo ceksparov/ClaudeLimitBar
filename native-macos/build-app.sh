@@ -16,7 +16,7 @@ APP_NAME="ClaudeLimitBar"
 # Bundle identifier, the id macOS uses to uniquely recognize the app.
 # Replace with your own domain/GitHub username if you publish your own build.
 BUNDLE_ID="io.github.claudelimitbar"
-VERSION="0.2.1"
+VERSION="0.2.2"
 
 APP_DIR="$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
