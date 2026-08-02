@@ -657,3 +657,34 @@ final class RecentActivityScenarioTests: XCTestCase {
         XCTAssertEqual(tracker.activity(now: now), .measured(deltaPercent: 18, elapsedMinutes: 13))
     }
 }
+
+final class DailyFigureTests: XCTestCase {
+    private func entry(_ consumed: Int, fromDayStart: Bool) -> UsageLedger.Day {
+        UsageLedger.Day(consumed: consumed, firstSeenAt: Date(), fromDayStart: fromDayStart)
+    }
+
+    // Ours samples every 20 seconds and runs whether or not the desktop app
+    // is open, so for a day it watched from the start it is the better record
+    // even when the file also has a figure.
+    func testOurOwnRecordWinsForADayItWatchedFromTheStart() {
+        XCTAssertEqual(dailyFigure(ledger: entry(8, fromDayStart: true), fromFile: 6), 8)
+    }
+
+    // Having only caught the tail of a day, the file may well have seen the
+    // rest of it.
+    func testTheFileWinsWhenOursOnlyCaughtPartOfTheDay() {
+        XCTAssertEqual(dailyFigure(ledger: entry(2, fromDayStart: false), fromFile: 9), 9)
+    }
+
+    func testAPartialFigureOfOursBeatsNothing() {
+        XCTAssertEqual(dailyFigure(ledger: entry(2, fromDayStart: false), fromFile: nil), 2)
+    }
+
+    func testNoRecordAtAllHasNoFigure() {
+        XCTAssertNil(dailyFigure(ledger: nil, fromFile: nil))
+    }
+
+    func testTheFileAnswersForDaysBeforeWeStartedRecording() {
+        XCTAssertEqual(dailyFigure(ledger: nil, fromFile: 15), 15)
+    }
+}

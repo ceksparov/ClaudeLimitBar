@@ -371,6 +371,22 @@ func pruned(_ ledger: UsageLedger, before cutoff: Date, calendar: Calendar = .cu
     return updated
 }
 
+// Decides which of the two records answers for a day.
+//
+// Ours wins when it watched the day from the start, since it samples every 20
+// seconds and keeps going whether or not the desktop app is open. Otherwise
+// the desktop app's file is the better bet: it may have been watching while
+// this app wasn't, and its figure for a day this app only caught the tail of
+// is the more complete one. A partial figure of ours is better than none.
+//
+// Every place that shows a day's usage goes through here, so the chart and
+// the "today" line can't end up quoting different numbers for the same day.
+func dailyFigure(ledger day: UsageLedger.Day?, fromFile: Int?) -> Int? {
+    if let day, day.fromDayStart { return day.consumed }
+    if let fromFile { return fromFile }
+    return day?.consumed
+}
+
 // MARK: - Day-by-day breakdown
 
 // One day's share of the weekly quota. `percent` is nil when the history

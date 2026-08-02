@@ -320,11 +320,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } ?? []
 
         return fromFile.map { day in
-            guard let mine = ledger.days[ledgerDayKey(day.day)] else { return day }
-            if mine.fromDayStart || day.percent == nil {
-                return DailyUsage(day: day.day, percent: mine.consumed)
-            }
-            return day
+            DailyUsage(
+                day: day.day,
+                percent: dailyFigure(
+                    ledger: ledger.days[ledgerDayKey(day.day)], fromFile: day.percent
+                )
+            )
         }
     }
 
@@ -334,12 +335,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // of passing a partial number off as a full day.
     private func todayUsage(now: Date) -> (percent: Int, since: Date)? {
         let startOfToday = Calendar.current.startOfDay(for: now)
+        let mine = SessionStore.ledger.days[ledgerDayKey(now)]
+        let fromFile = (try? loadHistory()).flatMap { usageToday(samples: $0, now: now) }
 
-        if let samples = try? loadHistory(), let total = usageToday(samples: samples, now: now) {
-            return (total, startOfToday)
-        }
-        guard let today = SessionStore.ledger.days[ledgerDayKey(now)] else { return nil }
-        return (today.consumed, today.fromDayStart ? startOfToday : today.firstSeenAt)
+        guard let percent = dailyFigure(ledger: mine, fromFile: fromFile) else { return nil }
+
+        // Only a ledger entry that started mid-day leaves part of the day
+        // unaccounted for; anything else covers it from midnight.
+        let partial = !(mine?.fromDayStart ?? false) && fromFile == nil
+        return (percent, partial ? (mine?.firstSeenAt ?? startOfToday) : startOfToday)
     }
 
     // MARK: - Drawing
