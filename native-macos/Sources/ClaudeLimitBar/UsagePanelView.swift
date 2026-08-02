@@ -53,6 +53,15 @@ final class UsagePanelView: NSView {
 
     private let model: UsagePanelModel
 
+    // Supporting lines sit between the system's secondary and primary label
+    // colours. Plain secondaryLabelColor is tuned for text on an opaque
+    // surface; over a menu's translucent background at this size it washes
+    // out to the point of being hard to read, which is exactly what these
+    // lines must not be — they carry the reset time and the recent figures.
+    private var detailColor: NSColor {
+        NSColor.labelColor.withAlphaComponent(0.75)
+    }
+
     // Drawing top-down is far easier to follow than AppKit's default
     // bottom-up origin, and this view is a stack of sections.
     override var isFlipped: Bool { true }
@@ -135,7 +144,7 @@ final class UsagePanelView: NSView {
         y += Metrics.meterHeight + Metrics.meterGap
 
         draw(
-            window.detail, font: .systemFont(ofSize: 11), color: .secondaryLabelColor,
+            window.detail, font: .systemFont(ofSize: 12), color: detailColor,
             in: NSRect(x: content.minX, y: y, width: content.width, height: Metrics.detailRow)
         )
         return y + Metrics.detailRow
@@ -169,7 +178,7 @@ final class UsagePanelView: NSView {
         )
         if let weekTotal = model.weekTotal {
             draw(
-                "\(weekTotal)% total", font: .systemFont(ofSize: 11), color: .secondaryLabelColor,
+                "\(weekTotal)% total", font: .systemFont(ofSize: 12), color: detailColor,
                 alignment: .right,
                 in: NSRect(x: content.minX, y: y + 1, width: content.width, height: Metrics.chartHeader)
             )
@@ -205,8 +214,8 @@ final class UsagePanelView: NSView {
             // row keeps short bars from floating far below their number.
             draw(
                 day.percent.map { "\($0)%" } ?? "–",
-                font: .systemFont(ofSize: 10, weight: .medium),
-                color: day.percent == nil ? .tertiaryLabelColor : .secondaryLabelColor,
+                font: .systemFont(ofSize: 11, weight: .medium),
+                color: day.percent == nil ? .tertiaryLabelColor : detailColor,
                 alignment: .center,
                 in: NSRect(
                     x: columnX, y: bar.minY - Metrics.chartValueRow,
@@ -220,7 +229,7 @@ final class UsagePanelView: NSView {
         if model.unrecorded > 0 {
             draw(
                 "+\(model.unrecorded)% while the app wasn't running",
-                font: .systemFont(ofSize: 11), color: .tertiaryLabelColor,
+                font: .systemFont(ofSize: 11), color: .secondaryLabelColor,
                 in: NSRect(
                     x: content.minX, y: y + Metrics.unrecordedGap,
                     width: content.width, height: Metrics.unrecordedRow
@@ -232,8 +241,8 @@ final class UsagePanelView: NSView {
     private func drawDayLabel(_ day: UsagePanelModel.Day, columnX: CGFloat, columnWidth: CGFloat, y: CGFloat) {
         draw(
             day.label,
-            font: .systemFont(ofSize: 10, weight: day.isToday ? .semibold : .regular),
-            color: day.isToday ? .labelColor : .tertiaryLabelColor, alignment: .center,
+            font: .systemFont(ofSize: 11, weight: day.isToday ? .semibold : .regular),
+            color: day.isToday ? .labelColor : .secondaryLabelColor, alignment: .center,
             in: NSRect(
                 x: columnX, y: y + Metrics.chartValueRow + Metrics.chartBars + 3,
                 width: columnWidth, height: Metrics.chartLabelRow

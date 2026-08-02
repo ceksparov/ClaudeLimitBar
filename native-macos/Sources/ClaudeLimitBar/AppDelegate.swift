@@ -509,7 +509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // for the weekly one. The reverse of either would be meaningless
             // — the weekly figure barely moves in 5 minutes, and a session
             // that resets every 5 hours has no "today".
-            var detail = "Resets \(reset)"
+            var detail = reset
             switch window.id {
             case "fiveHour":
                 // Always stated (never just left out) so "no data yet" can't

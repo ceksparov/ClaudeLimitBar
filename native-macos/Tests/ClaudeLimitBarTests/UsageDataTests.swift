@@ -22,30 +22,46 @@ final class FormatDurationTests: XCTestCase {
 
 final class ResetLabelTests: XCTestCase {
     func testNoResetAtAndZeroPercentMeansNoUsageYet() {
-        XCTAssertEqual(resetLabel(percent: 0, resetAt: nil, isEstimate: false, now: Date()), "no usage yet")
+        XCTAssertEqual(resetLabel(percent: 0, resetAt: nil, isEstimate: false, now: Date()), "No usage yet")
     }
 
     func testNoResetAtAndNonZeroPercentMeansUnknown() {
-        XCTAssertEqual(resetLabel(percent: 42, resetAt: nil, isEstimate: false, now: Date()), "unknown")
+        XCTAssertEqual(resetLabel(percent: 42, resetAt: nil, isEstimate: false, now: Date()), "Reset time unknown")
     }
 
     func testShortWindowHasNoClockTime() {
         let now = Date()
         let resetAt = now.addingTimeInterval(3 * 3600) // 3 hours out — same day
-        XCTAssertEqual(resetLabel(percent: 50, resetAt: resetAt, isEstimate: false, now: now), "3h 0m")
+        XCTAssertEqual(resetLabel(percent: 50, resetAt: resetAt, isEstimate: false, now: now), "Resets in 3h 0m")
     }
 
     func testLongWindowIncludesClockTime() {
         let now = Date()
         let resetAt = now.addingTimeInterval(3 * 86400) // 3 days out
         let label = resetLabel(percent: 50, resetAt: resetAt, isEstimate: false, now: now)
-        XCTAssertTrue(label.hasPrefix("3d 0h ("), "expected a weekday/clock suffix, got: \(label)")
+        XCTAssertTrue(label.hasPrefix("Resets in 3d 0h ("), "expected a weekday/clock suffix, got: \(label)")
+    }
+
+    func testAResetAlreadyDueReadsAsHappeningNow() {
+        let now = Date()
+        XCTAssertEqual(
+            resetLabel(percent: 50, resetAt: now.addingTimeInterval(-30), isEstimate: false, now: now),
+            "Resetting now"
+        )
+    }
+
+    func testSecondsAwayAvoidsSayingZeroMinutes() {
+        let now = Date()
+        XCTAssertEqual(
+            resetLabel(percent: 50, resetAt: now.addingTimeInterval(20), isEstimate: false, now: now),
+            "Resets in under a minute"
+        )
     }
 
     func testEstimateIsNoted() {
         let now = Date()
         let resetAt = now.addingTimeInterval(3600)
-        XCTAssertEqual(resetLabel(percent: 50, resetAt: resetAt, isEstimate: true, now: now), "1h 0m (estimated)")
+        XCTAssertEqual(resetLabel(percent: 50, resetAt: resetAt, isEstimate: true, now: now), "Resets in 1h 0m (estimated)")
     }
 }
 

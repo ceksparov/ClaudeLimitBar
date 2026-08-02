@@ -179,23 +179,29 @@ private func weekdayClock(_ date: Date) -> String {
 // Builds the text shown on the "Resets: ..." line in the menu. If the data
 // came from the live API we show the server's exact time; if it came from
 // the local file, we make clear to the user that it's our own estimate.
+// The whole sentence is built here rather than a bare duration the caller
+// prefixes with "Resets", because not every outcome is a duration: "Resets in
+// no usage yet" is what gluing a fixed prefix onto this would produce.
 func resetLabel(percent: Int, resetAt: Date?, isEstimate: Bool, now: Date) -> String {
-    if let resetAt {
-        let interval = resetAt.timeIntervalSince(now)
-        let text = formatDuration(interval * 1000)
-
-        // Knowing the exact day/time is useful for a day-scale (weekly)
-        // window; for the few-hour session window it already means "today",
-        // so it would just be noise — hence only adding it past ~1 day out.
-        var notes: [String] = []
-        if interval > 20 * 60 * 60 { notes.append(weekdayClock(resetAt)) }
-        if isEstimate { notes.append("estimated") }
-
-        guard !notes.isEmpty else { return text }
-        return "\(text) (\(notes.joined(separator: ", ")))"
+    guard let resetAt else {
+        return percent == 0 ? "No usage yet" : "Reset time unknown"
     }
-    if percent == 0 { return "no usage yet" }
-    return "unknown"
+
+    let interval = resetAt.timeIntervalSince(now)
+    guard interval > 0 else { return "Resetting now" }
+    guard interval >= 60 else { return "Resets in under a minute" }
+
+    var text = "Resets in \(formatDuration(interval * 1000))"
+
+    // Knowing the exact day/time is useful for a day-scale (weekly) window;
+    // for the few-hour session window it already means "today", so it would
+    // just be noise — hence only adding it past ~1 day out.
+    var notes: [String] = []
+    if interval > 20 * 60 * 60 { notes.append(weekdayClock(resetAt)) }
+    if isEstimate { notes.append("estimated") }
+
+    if !notes.isEmpty { text += " (\(notes.joined(separator: ", ")))" }
+    return text
 }
 
 // MARK: - Today's share of the weekly quota
