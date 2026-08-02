@@ -16,7 +16,7 @@ APP_NAME="ClaudeLimitBar"
 # Bundle identifier, macOS'un uygulamani benzersiz olarak tanidigi kimlik.
 # Yayinlarken kendi alan adin/GitHub kullanici adinla degistir.
 BUNDLE_ID="io.github.claudelimitbar"
-VERSION="1.0.0"
+VERSION="0.1.0"
 
 APP_DIR="$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
