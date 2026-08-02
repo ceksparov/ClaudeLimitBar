@@ -365,8 +365,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // window they do have, so the icon still shows something.
         let sessionWindow = snapshot.windows.first { $0.id == "fiveHour" }
         let headline = (sessionWindow ?? snapshot.windows.first)?.percent ?? 0
-        if let sessionWindow {
-            recentActivityTracker.record(percent: sessionWindow.percent, at: now, source: snapshot.source)
+        // Only the source that's actually authoritative right now feeds the
+        // tracker. While signed in that's the API; a momentary failure drops
+        // us onto the local file for display, but letting those readings in
+        // would count as a source change and throw the window away over a
+        // blip of network trouble.
+        let authoritative = snapshot.source == .api || SessionStore.sessionKey == nil
+        if let sessionWindow, authoritative {
+            recentActivityTracker.record(
+                percent: sessionWindow.percent, at: now,
+                source: snapshot.source, resetAt: sessionWindow.resetAt
+            )
         }
         if let weekly = snapshot.windows.first(where: { $0.id == "sevenDay" }) {
             recordInLedger(weeklyPercent: weekly.percent, now: now, source: snapshot.source)

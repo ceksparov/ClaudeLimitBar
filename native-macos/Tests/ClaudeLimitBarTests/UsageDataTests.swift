@@ -131,7 +131,7 @@ final class RecentActivityTrackerTests: XCTestCase {
             let secondsAgo = Double(step) * pollSeconds
             let percent = breakpoints.last { $0.minutesAgo * 60 >= secondsAgo }?.percent
                 ?? breakpoints[0].percent
-            tracker.record(percent: percent, at: start.addingTimeInterval(-secondsAgo), source: .api)
+            tracker.record(percent: percent, at: start.addingTimeInterval(-secondsAgo), source: .api, resetAt: nil)
         }
         return tracker
     }
@@ -157,24 +157,66 @@ final class RecentActivityTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsedMinutes: 3))
     }
 
-    // A drop is the 5-hour window resetting. The readings before it belong
-    // to a window that no longer exists; holding onto them left every
-    // comparison negative, and so unreportable, for most of an hour.
-    func testStartsFreshAfterTheWindowResetsInsteadOfGoingQuiet() {
+    // A reset the server announced needs no corroboration: the window is
+    // gone the moment its reset time jumps forward.
+    func testAnAnnouncedResetClearsTheWindowImmediately() {
         var tracker = RecentActivityTracker()
-        for minutesAgo in stride(from: 30, through: 11, by: -1) {
+        let firstWindow = start.addingTimeInterval(600)
+        for minutesAgo in stride(from: 30, through: 4, by: -1) {
             tracker.record(
-                percent: 90, at: start.addingTimeInterval(-Double(minutesAgo) * 60), source: .api
+                percent: 90, at: start.addingTimeInterval(-Double(minutesAgo) * 60),
+                source: .api, resetAt: firstWindow
             )
         }
-        // The window resets, then usage starts again in the new one.
-        for minutesAgo in stride(from: 10, through: 0, by: -1) {
+
+        // The window turns over and usage starts again in the new one.
+        let secondWindow = firstWindow.addingTimeInterval(5 * 3600)
+        for minutesAgo in stride(from: 3, through: 0, by: -1) {
             tracker.record(
-                percent: 10 - minutesAgo, at: start.addingTimeInterval(-Double(minutesAgo) * 60),
-                source: .api
+                percent: 3 - minutesAgo, at: start.addingTimeInterval(-Double(minutesAgo) * 60),
+                source: .api, resetAt: secondWindow
             )
         }
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 10, elapsedMinutes: 10))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 3, elapsedMinutes: 3))
+    }
+
+    // Both the API and the desktop app emit the occasional bad reading — a
+    // lone 0 between two 12s. Wiping twenty minutes of history for one of
+    // them was losing real windows, so a drop has to survive a poll first.
+    func testALoneDipIsIgnoredRatherThanTakenAsAReset() {
+        var tracker = RecentActivityTracker()
+        for minutesAgo in stride(from: 12, through: 2, by: -1) {
+            tracker.record(
+                percent: 16, at: start.addingTimeInterval(-Double(minutesAgo) * 60),
+                source: .api, resetAt: nil
+            )
+        }
+        tracker.record(percent: 15, at: start.addingTimeInterval(-60), source: .api, resetAt: nil)
+        tracker.record(percent: 17, at: start, source: .api, resetAt: nil)
+
+        // Measured against the real history: +1, over the floor. Had the dip
+        // been taken as a reset, the window would have restarted at 15 and
+        // this would read "+2% last 1 min" — which is what it did before.
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 1, elapsedMinutes: 5))
+    }
+
+    // A drop that is still there on the next poll is real, whatever caused
+    // it, and the window starts over.
+    func testADropThatPersistsIsAccepted() {
+        var tracker = RecentActivityTracker()
+        for minutesAgo in stride(from: 12, through: 6, by: -1) {
+            tracker.record(
+                percent: 90, at: start.addingTimeInterval(-Double(minutesAgo) * 60),
+                source: .api, resetAt: nil
+            )
+        }
+        for minutesAgo in stride(from: 5, through: 0, by: -1) {
+            tracker.record(
+                percent: 5 - minutesAgo, at: start.addingTimeInterval(-Double(minutesAgo) * 60),
+                source: .api, resetAt: nil
+            )
+        }
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 4, elapsedMinutes: 4))
     }
 
     func testUsesTheFiveMinuteFloorWhenThatIsAllWeHave() {
@@ -204,7 +246,7 @@ final class RecentActivityTrackerTests: XCTestCase {
         for minutesAgo in stride(from: 30, through: 0, by: -1) {
             tracker.record(
                 percent: 30 - minutesAgo,
-                at: start.addingTimeInterval(-Double(minutesAgo) * 60), source: .api
+                at: start.addingTimeInterval(-Double(minutesAgo) * 60), source: .api, resetAt: nil
             )
         }
         XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 20, elapsedMinutes: 20))
@@ -224,12 +266,11 @@ final class RecentActivityTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsedMinutes: 5))
     }
 
-    // A drop means the 5-hour window reset in between; there's no honest
-    // "recent usage" number for that, so we report nothing rather than a
-    // negative delta.
-    func testUnknownWhenTheSessionWindowResetInBetween() {
+    // A single late drop is held back pending confirmation, so the figure
+    // stays with the history it already has rather than going silent.
+    func testASingleDropAtTheEndDoesNotBlankTheFigure() {
         let tracker = self.tracker(percentTimeline: [(8, 95), (6, 95), (0, 3)])
-        XCTAssertEqual(tracker.activity(now: start), .unknown)
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsedMinutes: 5))
     }
 }
 
@@ -240,17 +281,17 @@ final class RecentActivitySourceTests: XCTestCase {
     // would report usage that never happened. Switching sources starts over.
     func testSwitchingSourcesDiscardsTheOldBaseline() {
         var tracker = RecentActivityTracker()
-        tracker.record(percent: 44, at: start.addingTimeInterval(-600), source: .api)
-        tracker.record(percent: 44, at: start.addingTimeInterval(-300), source: .api)
-        tracker.record(percent: 38, at: start, source: .localFile)  // stale file reading
+        tracker.record(percent: 44, at: start.addingTimeInterval(-600), source: .api, resetAt: nil)
+        tracker.record(percent: 44, at: start.addingTimeInterval(-300), source: .api, resetAt: nil)
+        tracker.record(percent: 38, at: start, source: .localFile, resetAt: nil)  // stale file reading
 
         XCTAssertEqual(tracker.activity(now: start), .unknown)
     }
 
     func testResetForgetsEverything() {
         var tracker = RecentActivityTracker()
-        tracker.record(percent: 10, at: start.addingTimeInterval(-300), source: .api)
-        tracker.record(percent: 40, at: start, source: .api)
+        tracker.record(percent: 10, at: start.addingTimeInterval(-300), source: .api, resetAt: nil)
+        tracker.record(percent: 40, at: start, source: .api, resetAt: nil)
         XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 30, elapsedMinutes: 5))
 
         tracker.reset()
@@ -607,7 +648,8 @@ final class RecentActivityScenarioTests: XCTestCase {
 
         for step in stride(from: -600.0, through: 780.0, by: 20) {
             tracker.record(
-                percent: percent(atSecond: step), at: start.addingTimeInterval(step), source: .api
+                percent: percent(atSecond: step), at: start.addingTimeInterval(step), source: .api,
+                resetAt: nil
             )
         }
 

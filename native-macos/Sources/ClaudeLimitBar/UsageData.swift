@@ -492,6 +492,8 @@ struct RecentActivityTracker {
 
     private var samples: [(date: Date, percent: Int)] = []
     private var recordedSource: UsageSnapshot.Source?
+    private var windowResetAt: Date?
+    private var sawUnexplainedDrop = false
 
     init(minWindow: TimeInterval = 5 * 60, maxWindow: TimeInterval = 20 * 60) {
         self.minWindow = minWindow
@@ -507,19 +509,45 @@ struct RecentActivityTracker {
     // local file lags the live API by up to 15 minutes, so switching to it
     // during an outage and back again would read as a drop and then a spike
     // that never happened. On a source change we start over instead.
-    mutating func record(percent: Int, at date: Date, source: UsageSnapshot.Source) {
-        // A drop means the 5-hour window reset. Readings from the window that
-        // just ended can't be compared against the new one, and keeping them
-        // would leave every comparison negative — and so unreportable — until
-        // they aged out, which is most of an hour of saying nothing after
-        // every reset. The new window starts here.
-        if let previous = samples.last?.percent, percent < previous {
-            samples.removeAll()
-        }
+    mutating func record(
+        percent: Int, at date: Date, source: UsageSnapshot.Source, resetAt: Date?
+    ) {
         if source != recordedSource {
             recordedSource = source
             samples.removeAll()
+            windowResetAt = nil
+            sawUnexplainedDrop = false
         }
+
+        // The server says when the window turns over, so there's no need to
+        // infer it: a reset time that jumps forward is a new window, and
+        // readings from the one that just ended can't be compared against it.
+        // (The minute of slack is because a reset time reconstructed from the
+        // local file is an estimate that drifts slightly between reads.)
+        if let resetAt {
+            if let known = windowResetAt, resetAt > known.addingTimeInterval(60) {
+                samples.removeAll()
+                sawUnexplainedDrop = false
+            }
+            windowResetAt = resetAt
+        }
+
+        if let previous = samples.last?.percent, percent < previous {
+            // Usage falling with no reset announced is more likely a bad
+            // reading than a real event — both the API and the desktop app
+            // emit the occasional one (a lone 0 between two 12s, say).
+            // Throwing away twenty minutes of history for something that
+            // might be gone by the next poll costs far more than waiting one
+            // poll to find out.
+            guard sawUnexplainedDrop else {
+                sawUnexplainedDrop = true
+                return
+            }
+            // It stuck, so it's real however it came about.
+            samples.removeAll()
+        }
+        sawUnexplainedDrop = false
+
         samples.append((date, percent))
         let cutoff = date.addingTimeInterval(-maxWindow - 60)
         samples.removeAll { $0.date < cutoff }
@@ -530,6 +558,8 @@ struct RecentActivityTracker {
     mutating func reset() {
         samples.removeAll()
         recordedSource = nil
+        windowResetAt = nil
+        sawUnexplainedDrop = false
     }
 
     // `.unknown` covers two cases: there isn't even `minWindow` of history
