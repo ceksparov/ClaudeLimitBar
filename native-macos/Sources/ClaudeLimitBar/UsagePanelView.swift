@@ -51,7 +51,7 @@ final class UsagePanelView: NSView {
         static let unrecordedRow: CGFloat = 16
     }
 
-    private let model: UsagePanelModel
+    private var model: UsagePanelModel
 
     // Supporting lines sit between the system's secondary and primary label
     // colours. Plain secondaryLabelColor is tuned for text on an opaque
@@ -74,6 +74,25 @@ final class UsagePanelView: NSView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    // Redraws with newer figures without rebuilding the menu around it.
+    // Reassigning statusItem.menu is what would close the menu under the
+    // user's cursor; repainting a view already inside it doesn't, so an open
+    // panel can stay current instead of showing whatever was true when it
+    // opened (most visibly "measuring recent usage", which otherwise sits
+    // there long after the figure it's waiting for has arrived).
+    //
+    // Returns false when the new model wouldn't fit the same height — a
+    // window appearing or the chart gaining a row would mean resizing a menu
+    // that's already on screen, which is the jarring case this is meant to
+    // avoid. That redraw waits for the menu to close.
+    func update(model: UsagePanelModel) -> Bool {
+        guard Self.height(for: model) == frame.size.height else { return false }
+        self.model = model
+        setAccessibilityLabel(Self.accessibilityLabel(for: model))
+        needsDisplay = true
+        return true
+    }
 
     private static func height(for model: UsagePanelModel) -> CGFloat {
         var height = Metrics.padTop + Metrics.padBottom

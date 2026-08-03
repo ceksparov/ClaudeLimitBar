@@ -383,8 +383,19 @@ func pruned(_ ledger: UsageLedger, before cutoff: Date, calendar: Calendar = .cu
 // the "today" line can't end up quoting different numbers for the same day.
 func dailyFigure(ledger day: UsageLedger.Day?, fromFile: Int?) -> Int? {
     if let day, day.fromDayStart { return day.consumed }
-    if let fromFile { return fromFile }
-    return day?.consumed
+    guard let fromFile else { return day?.consumed }
+    guard let day else { return fromFile }
+
+    // Neither record covers the whole day here: ours began part-way through
+    // it, and the file stops at whenever the desktop app last wrote — which
+    // can be hours ago, since nothing about this app requires that app to be
+    // running. Both are therefore undercounts of the same quantity, and the
+    // larger of two undercounts is the closer one.
+    //
+    // Handing the file the day outright is what used to freeze "today" at the
+    // last figure the desktop app saw while the weekly percentage directly
+    // above it — read live, every 20 seconds — went on climbing.
+    return max(day.consumed, fromFile)
 }
 
 // MARK: - Day-by-day breakdown

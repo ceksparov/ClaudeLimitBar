@@ -680,6 +680,13 @@ final class DailyFigureTests: XCTestCase {
         XCTAssertEqual(dailyFigure(ledger: entry(2, fromDayStart: false), fromFile: nil), 2)
     }
 
+    // The file stops the moment the desktop app does, so it can sit hours
+    // behind while we keep reading the live figure. Once ours has overtaken
+    // it, the file is the staler of two partial records, not the fuller one.
+    func testOursWinsOnceItHasOvertakenAStaleFile() {
+        XCTAssertEqual(dailyFigure(ledger: entry(9, fromDayStart: false), fromFile: 4), 9)
+    }
+
     func testNoRecordAtAllHasNoFigure() {
         XCTAssertNil(dailyFigure(ledger: nil, fromFile: nil))
     }
