@@ -2,7 +2,7 @@ import Foundation
 
 // Nothing UI-related (menu bar, colors) lives in this file — just "read the
 // file, compute the numbers" logic. Drawing on screen is AppDelegate.swift's
-// job. This is a direct port of the JS logic in menubar/claude-usage.10s.js —
+// job. This is a direct port of the JS logic in macos/menubar/claude-usage.10s.js —
 // same file, same math, same result.
 
 struct RawUsage: Codable {
