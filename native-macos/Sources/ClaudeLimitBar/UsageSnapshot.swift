@@ -7,9 +7,13 @@ import Foundation
 // sources. (In software this is usually called an "adapter" or "common
 // model" approach: converting different sources into one internal representation.)
 struct UsageSnapshot {
-    enum Source {
-        case api        // fetched live from claude.ai — reset time is EXACT
-        case localFile  // from the desktop app's file — reset time is an ESTIMATE
+    // Codable, and with spelled-out raw values, because the recent-activity
+    // log records which source it was built from and that log outlives the
+    // process (see RecentActivityTracker.State). Letting the compiler pick
+    // the raw values would tie what's on disk to the order of these cases.
+    enum Source: String, Codable {
+        case api = "api"              // fetched live from claude.ai — reset time is EXACT
+        case localFile = "localFile"  // from the desktop app's file — reset time is an ESTIMATE
     }
 
     struct Window {

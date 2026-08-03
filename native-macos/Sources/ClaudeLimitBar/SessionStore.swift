@@ -138,6 +138,28 @@ enum SessionStore {
         }
     }
 
+    // The recent-activity log (see RecentActivityTracker).
+    //
+    // Kept across launches so a restart doesn't owe the panel a stretch of
+    // "measuring recent usage" before it can quote a figure it already had a
+    // moment earlier. Nothing in it is sensitive: timestamps and percentages.
+    // A log restored from long ago is discarded by the tracker itself rather
+    // than trusted — every sample in it falls outside the twenty-minute
+    // horizon.
+    static var recentActivity: RecentActivityTracker.State {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: "recentActivity"),
+                let decoded = try? JSONDecoder().decode(
+                    RecentActivityTracker.State.self, from: data)
+            else { return RecentActivityTracker.State() }
+            return decoded
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            UserDefaults.standard.set(data, forKey: "recentActivity")
+        }
+    }
+
     // Caches the EXACT reset times we learned from the API.
     //
     // Why: a reset time is an absolute moment ("July 31, 7:10 PM"). Once
@@ -160,6 +182,10 @@ enum SessionStore {
     static func clearAccountCaches() {
         for id in ["fiveHour", "sevenDay"] { setCachedResetAt(id, nil) }
         UserDefaults.standard.removeObject(forKey: "usageLedger")
+        // Now that the activity log survives a launch, it has to be cleared
+        // here too: otherwise the first figure shown for a newly chosen
+        // account would describe the previous one's usage.
+        UserDefaults.standard.removeObject(forKey: "recentActivity")
     }
 
     static func setCachedResetAt(_ id: String, _ date: Date?) {
