@@ -27,4 +27,17 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3124.44" />
   </ItemGroup>
 
+  <!--
+    The WebView2 package ships a WPF control alongside the WinForms one. This app never uses
+    it, but it drags in WPF's WindowsBase 5.0.0.0 and MSBuild then warns (MSB3277) about the
+    conflict with the 4.0.0.0 the framework supplies. Dropping the reference clears the
+    warning and keeps the WPF assemblies out of the output.
+  -->
+  <Target Name="RemoveWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)"
+                 Condition="'%(FileName)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+
 </Project>
