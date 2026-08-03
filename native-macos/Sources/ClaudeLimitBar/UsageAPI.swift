@@ -32,6 +32,29 @@ enum APIError: LocalizedError {
     }
 }
 
+extension Error {
+    // System errors (URLError in particular) come with long, technical
+    // localizedDescriptions — e.g. "An SSL error has occurred and a secure
+    // connection to the server cannot be made." — that overflow the menu's
+    // fixed width. This maps the common cases to something that fits.
+    var shortDescription: String {
+        guard let urlError = self as? URLError else { return localizedDescription }
+        switch urlError.code {
+        case .notConnectedToInternet, .networkConnectionLost: return "Offline"
+        case .timedOut: return "Timed out"
+        case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+            return "Unreachable"
+        case .secureConnectionFailed, .serverCertificateUntrusted,
+             .serverCertificateHasBadDate, .serverCertificateNotYetValid,
+             .serverCertificateHasUnknownRoot, .clientCertificateRejected,
+             .clientCertificateRequired:
+            return "SSL error"
+        default:
+            return "Connection error"
+        }
+    }
+}
+
 enum UsageAPI {
     private static let host = "https://claude.ai"
 

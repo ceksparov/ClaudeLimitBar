@@ -34,8 +34,42 @@ enum SessionStore {
               let data = item as? Data,
               let value = String(data: data, encoding: .utf8),
               !value.isEmpty
-        else { return nil }
+        else {
+            rememberSignedIn(false)
+            return nil
+        }
+        rememberSignedIn(true)
         return value
+    }
+
+    // Reading the Keychain is an XPC round trip to securityd — measured at
+    // ~1.9 ms on this machine, which is a lot to spend on a question the
+    // drawing code asks several times per refresh just to decide between two
+    // menus. The answer only changes when this type writes, so it's worth
+    // remembering.
+    //
+    // Only the ANSWER is cached, never the key itself: anything that
+    // actually talks to the API still reads `sessionKey` and gets it from the
+    // Keychain, so the credential lives in memory no longer than it did
+    // before.
+    private static let signedInLock = NSLock()
+    private static var signedInCache: Bool?
+
+    private static func rememberSignedIn(_ value: Bool) {
+        signedInLock.lock()
+        signedInCache = value
+        signedInLock.unlock()
+    }
+
+    // Whether a key is stored, without paying for the key itself. Safe to
+    // call from any thread; `sessionKey` may be read off the main thread by
+    // the API layer while the menu is being drawn on it.
+    static var isSignedIn: Bool {
+        signedInLock.lock()
+        let cached = signedInCache
+        signedInLock.unlock()
+        if let cached { return cached }
+        return sessionKey != nil  // populates the cache on its way out
     }
 
     static func save(sessionKey: String) {
@@ -54,10 +88,12 @@ enum SessionStore {
         // short-lived; copying it elsewhere would be an unnecessary risk.
         query[kSecAttrSynchronizable as String] = false
         SecItemAdd(query as CFDictionary, nil)
+        rememberSignedIn(true)
     }
 
     static func clear() {
         SecItemDelete(baseQuery as CFDictionary)
+        rememberSignedIn(false)
     }
 
     // The organization id isn't sensitive (just a UUID), so it doesn't need

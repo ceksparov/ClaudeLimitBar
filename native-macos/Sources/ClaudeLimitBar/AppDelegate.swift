@@ -1,4 +1,5 @@
 import AppKit
+import Network
 import ServiceManagement
 
 // This file handles "what do we draw on screen": the menu bar icon, the
@@ -36,9 +37,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var timer: Timer?
     private let loginWindow = LoginWindowController()
 
+    // Detects Wi-Fi/Ethernet drops and reconnects so we don't wait for the
+    // next 20-second poll to notice — the menu itself only redraws once
+    // it's closed (see shouldSkipRedraw), but this at least gets a fresh
+    // fetch in flight the moment connectivity changes instead of up to
+    // 20s later.
+    private let pathMonitor = NWPathMonitor()
+    private let pathMonitorQueue = DispatchQueue(label: "io.github.claudelimitbar.pathmonitor")
+    private var lastNetworkStatus: NWPath.Status?
+
     // Rebuilding the menu while it's open would make it flicker/close under
     // the user's cursor. This flag lets us defer drawing while it's open.
     private var menuIsOpen = false
+
+    // The panel currently inside the menu, so it can be repainted in place
+    // while the menu is open (see UsagePanelView.update). Weak because the
+    // menu owns it: once a rebuilt menu replaces it, this should go nil
+    // rather than keep a detached view alive.
+    private weak var panelView: UsagePanelView?
 
     // Set to true when we want to redraw immediately after the user
     // themselves just clicked a menu item (e.g. "Start at Login") — AppKit
@@ -147,9 +163,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // "[weak self]" avoids a memory leak: the timer holds a weak
         // reference to AppDelegate, so if AppDelegate were ever deallocated,
         // the timer wouldn't be forced to keep it alive forever.
-        timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+        let poll = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+        // A scheduled timer only runs in the default run loop mode, and
+        // tracking an open menu switches the main run loop into event
+        // tracking — so without this the polling stops for exactly as long as
+        // the user is looking at the panel, which is when fresh figures
+        // matter most. .common covers both modes.
+        RunLoop.main.add(poll, forMode: .common)
+        timer = poll
+
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                self?.handleNetworkPathChange(path.status)
+            }
+        }
+        pathMonitor.start(queue: pathMonitorQueue)
+    }
+
+    // Fires on every path update (e.g. switching from Wi-Fi to Ethernet),
+    // not just real connectivity changes — only act when satisfied/
+    // unsatisfied actually flips, otherwise we'd fetch on every interface
+    // fluctuation. The first callback just records the baseline.
+    private func handleNetworkPathChange(_ status: NWPath.Status) {
+        defer { lastNetworkStatus = status }
+        guard let previous = lastNetworkStatus, previous != status else { return }
+        log("network status changed: \(previous) -> \(status)")
+        // Not force: true — a network flap should still respect the 5s
+        // throttle and, more importantly, any server-mandated rate-limit
+        // backoff (pauseUntil). Bypassing that just because Wi-Fi blipped
+        // would be exactly the wrong response to a 429.
+        refresh()
     }
 
     // MARK: - Fetching data
@@ -161,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // user signs in or switches organizations, they should see the result
     // IMMEDIATELY, not wait because "5 seconds haven't passed yet".
     private func refresh(force: Bool = false) {
-        if SessionStore.sessionKey == nil {
+        if !SessionStore.isSignedIn {
             apiError = nil
             organizations = []  // don't carry over the old list after signing out
             renderFromFile()
@@ -374,7 +419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // us onto the local file for display, but letting those readings in
         // would count as a source change and throw the window away over a
         // blip of network trouble.
-        let authoritative = snapshot.source == .api || SessionStore.sessionKey == nil
+        let authoritative = snapshot.source == .api || !SessionStore.isSignedIn
         if let sessionWindow, authoritative {
             recentActivityTracker.record(
                 percent: sessionWindow.percent, at: now,
@@ -391,8 +436,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             " \(headline)%", color: stale ? .disabledControlTextColor : colorFor(headline)
         )
 
-        // If the user has the menu open right now, don't change it out from under them.
-        guard !shouldSkipRedraw() else { return }
+        // The menu itself can't be swapped out while the user has it open —
+        // that would close it under their cursor. The panel inside it can
+        // still be repainted, though, so the figures stay live rather than
+        // freezing at whatever was true the moment it opened.
+        guard !shouldSkipRedraw() else {
+            _ = panelView?.update(model: panelModel(snapshot: snapshot, now: now))
+            return
+        }
 
         // NSMenu is the dropdown itself; each row is an NSMenuItem.
         let menu = NSMenu()
@@ -401,7 +452,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The whole display half of the menu is one drawn view rather than a
         // column of text rows — see UsagePanelView.
         let panel = NSMenuItem()
-        panel.view = UsagePanelView(model: panelModel(snapshot: snapshot, now: now))
+        let panelBody = UsagePanelView(model: panelModel(snapshot: snapshot, now: now))
+        panel.view = panelBody
+        panelView = panelBody
         menu.addItem(panel)
 
         menu.addItem(.separator())
@@ -418,7 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if let apiError {
             addRow(
-                to: menu, "⚠️ Live data unavailable: \(apiError.localizedDescription)",
+                to: menu, "⚠️ Live data: \(apiError.shortDescription)",
                 color: warningColor, small: true
             )
         }
@@ -467,7 +520,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Claude desktop app installed will see — so "I downloaded a
         // broken app" is exactly the impression that would form on first
         // contact.
-        guard SessionStore.sessionKey != nil else {
+        guard SessionStore.isSignedIn else {
             renderSignedOut()
             return
         }
@@ -480,7 +533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Couldn't read Claude usage data", action: nil, keyEquivalent: "")
         addRow(to: menu, "Error: \(error.localizedDescription)", color: grayText, small: true)
         if let apiError {
-            addRow(to: menu, "Live data: \(apiError.localizedDescription)", color: grayText, small: true)
+            addRow(to: menu, "Live data: \(apiError.shortDescription)", color: grayText, small: true)
         }
         appendFooter(to: menu)
         statusItem.menu = menu
@@ -586,7 +639,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appendOrganizationMenu(to: menu)
 
         // A single row depending on sign-in state: either offer to sign in, or offer to sign out.
-        let signedIn = SessionStore.sessionKey != nil
+        let signedIn = SessionStore.isSignedIn
         let authItem = NSMenuItem(
             title: signedIn ? "Sign Out" : "Sign In with Claude…",
             action: signedIn ? #selector(signOut) : #selector(signIn),
