@@ -5,6 +5,10 @@ weekly) at a glance — no need to open claude.ai to check.
 
 Not affiliated with or endorsed by Anthropic.
 
+There is a Windows tray app with the same idea in [`windows/`](windows/) — it is a
+separate codebase with its own README. The rest of this file describes the macOS app,
+which lives in [`macos/`](macos/).
+
 ## What it shows
 
 - **Both limit windows** — the 5-hour session and the weekly one, each with a
@@ -42,10 +46,12 @@ showing a number it can't stand behind.
 ## Building from source
 
 ```bash
-cd native-macos
+cd macos
 ./build-app.sh        # produces ClaudeLimitBar.app
 ./build-app.sh --zip   # also produces a distributable .zip
 ```
+
+For the Windows app, see [windows/README.md](windows/README.md).
 
 ## How it gets your usage data
 

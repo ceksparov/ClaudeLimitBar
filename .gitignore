@@ -2,7 +2,11 @@
 node_modules/
 .DS_Store
 .claude/settings.local.json
-native-macos/.build/
-native-macos/.swiftpm/
-native-macos/ClaudeLimitBar.app/
-native-macos/*.zip
+macos/.build/
+macos/.swiftpm/
+macos/ClaudeLimitBar.app/
+macos/*.zip
+
+# Windows / .NET
+windows/**/bin/
+windows/**/obj/
