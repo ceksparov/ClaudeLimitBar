@@ -127,7 +127,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Answers "how much has the session percentage grown recently" for the
     // menu (see RecentActivityTracker in UsageData.swift).
-    private var recentActivityTracker = RecentActivityTracker()
+    // Seeded from the log the last run left behind, so a relaunch picks up
+    // where it stopped instead of owing the panel a silent stretch first.
+    private var recentActivityTracker = RecentActivityTracker(state: SessionStore.recentActivity)
 
     // AppKit calls this automatically once NSApplication has finished
     // launching (similar to a "DOMContentLoaded"-style "I'm ready now" moment).
@@ -316,6 +318,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // Clearing the activity log has to reach the stored copy as well: it
+    // outlives the process now, so forgetting it only in memory would let the
+    // next launch restore the very samples we just decided no longer describe
+    // the account being looked at.
+    private func resetRecentActivity() {
+        recentActivityTracker.reset()
+        SessionStore.recentActivity = recentActivityTracker.state
+    }
+
     // Rebuilds the menu from whatever data we already have, without hitting the server.
     private func redraw() {
         if let lastSnapshot {
@@ -425,6 +436,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 percent: sessionWindow.percent, at: now,
                 source: snapshot.source, resetAt: sessionWindow.resetAt
             )
+            SessionStore.recentActivity = recentActivityTracker.state
         }
         if let weekly = snapshot.windows.first(where: { $0.id == "sevenDay" }) {
             recordInLedger(weeklyPercent: weekly.percent, now: now, source: snapshot.source)
@@ -581,8 +593,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // Always stated (never just left out) so "no data yet" can't
                 // be mistaken for a measured 0%.
                 switch recentActivityTracker.activity(now: now) {
-                case .measured(let delta, let minutes):
-                    detail += " · +\(delta)% last \(minutes) min"
+                case .measured(let delta, let elapsed):
+                    detail += " · +\(delta)% last \(recentSpanLabel(elapsed))"
                 case .unknown:
                     // Reached only just after a launch, or when the window
                     // reset moments ago. Saying "unknown" reads like a
@@ -739,7 +751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.pauseUntil = nil
             // Samples collected before this belong to whoever was signed in
             // before — comparing across the two would invent activity.
-            self?.recentActivityTracker.reset()
+            self?.resetRecentActivity()
             self?.refresh(force: true)
         }
     }
@@ -754,7 +766,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         apiError = nil
         needsReauth = false  // the user signed out on their own, no warning needed
         lastSnapshot = nil   // don't let stale live data get redrawn again
-        recentActivityTracker.reset()
+        resetRecentActivity()
 
         // Clearing the Keychain isn't enough: WebKit's persistent store
         // still holds the claude.ai session cookie, otherwise "signed out"
@@ -772,7 +784,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // during error recovery, but the user's choice should persist.
         SessionStore.preferredOrgId = uuid
         lastSnapshot = nil  // now looking at a different organization
-        recentActivityTracker.reset()
+        resetRecentActivity()
         // Cached reset times belong to the PREVIOUS organization.
         SessionStore.clearAccountCaches()
         refresh(force: true)

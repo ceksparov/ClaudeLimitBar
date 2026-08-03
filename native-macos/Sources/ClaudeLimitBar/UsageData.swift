@@ -487,26 +487,60 @@ func weekdayLabel(_ date: Date) -> String {
     return formatter.string(from: date)
 }
 
-// Tracks how much the 5-hour session percentage has grown "recently", from
-// a rolling in-memory log of samples. Deliberately NOT persisted to disk —
-// it describes recent activity, not a long-term history, so starting empty
-// on every launch is fine.
+// Tracks how much the 5-hour session percentage has grown "recently", from a
+// rolling log of samples.
+//
+// The log outlives the process. It used to be memory-only, on the reasoning
+// that recent activity isn't long-term history so starting empty each launch
+// was harmless. It wasn't: every launch then owed a stretch of silence before
+// it could say anything, and quitting and reopening the app — or installing a
+// new build — is precisely when someone goes to look at it. What's kept
+// describes the last twenty minutes either way, and a launch after a longer
+// gap discards it on the first new reading regardless (see the pruning at the
+// end of record).
 struct RecentActivityTracker {
+    // Everything worth carrying across a launch, in one Codable value so the
+    // logic below stays pure: whoever owns the tracker loads this in and
+    // writes it back out, and the tracker itself never touches storage.
+    struct State: Codable, Equatable {
+        struct Sample: Codable, Equatable {
+            let date: Date
+            let percent: Int
+        }
+
+        var samples: [Sample] = []
+        // Carried across launches alongside the samples. Without it, the
+        // first reading after a restart would look like a source change and
+        // throw away everything we had just restored.
+        var source: UsageSnapshot.Source?
+        var windowResetAt: Date?
+        var sawUnexplainedDrop = false
+    }
+
     // Distinguishes "we checked and it's genuinely 0%" from "we can't
     // honestly say" — collapsing both into a plain "0%" would make someone
     // who just woke their Mac up (no baseline yet) think we measured zero
     // recent activity, when really we just have no data.
     //
-    // `elapsedMinutes` is the ACTUAL age of the baseline sample, not a fixed
-    // number. While signed in (a fresh sample every 20s) it lands almost
-    // exactly on the window; while reading the local file (which the Claude
-    // desktop app only writes every ~5 minutes, at no fixed cadence) the
-    // closest baseline might really be 6 or 8 minutes old. Rather than
-    // mislabel that, we report whatever the real gap turned out to be.
+    // `elapsed` is the ACTUAL age of the baseline sample, not a fixed number.
+    // While signed in (a fresh sample every 20s) it lands almost exactly on
+    // the window; while reading the local file (which the Claude desktop app
+    // only writes every ~5 minutes, at no fixed cadence) the closest baseline
+    // might really be 6 or 8 minutes old. Rather than mislabel that, we report
+    // whatever the real gap turned out to be — as a duration rather than a
+    // whole number of minutes, so a span shorter than a minute can be stated
+    // instead of withheld (see recentSpanLabel).
     enum Result: Equatable {
         case unknown
-        case measured(deltaPercent: Int, elapsedMinutes: Int)
+        case measured(deltaPercent: Int, elapsed: TimeInterval)
     }
+
+    // The shortest span worth describing. One poll apart is the smallest gap
+    // that can exist between two readings, so waiting for longer than that is
+    // withholding an answer we already have. It used to be a full minute,
+    // which is why a fresh launch sat on "measuring recent usage" for three
+    // polls after it already knew the figure.
+    let minSpan: TimeInterval
 
     // The window is elastic between these two bounds, and reaches back only
     // as far as it needs to. Usage that started 16 minutes ago is reported
@@ -517,14 +551,16 @@ struct RecentActivityTracker {
     let minWindow: TimeInterval
     let maxWindow: TimeInterval
 
-    private var samples: [(date: Date, percent: Int)] = []
-    private var recordedSource: UsageSnapshot.Source?
-    private var windowResetAt: Date?
-    private var sawUnexplainedDrop = false
+    private(set) var state: State
 
-    init(minWindow: TimeInterval = 5 * 60, maxWindow: TimeInterval = 20 * 60) {
+    init(
+        minWindow: TimeInterval = 5 * 60, maxWindow: TimeInterval = 20 * 60,
+        minSpan: TimeInterval = 20, state: State = State()
+    ) {
         self.minWindow = minWindow
         self.maxWindow = maxWindow
+        self.minSpan = minSpan
+        self.state = state
     }
 
     // Appends a sample and drops anything too old to still serve as a
@@ -539,11 +575,11 @@ struct RecentActivityTracker {
     mutating func record(
         percent: Int, at date: Date, source: UsageSnapshot.Source, resetAt: Date?
     ) {
-        if source != recordedSource {
-            recordedSource = source
-            samples.removeAll()
-            windowResetAt = nil
-            sawUnexplainedDrop = false
+        if source != state.source {
+            state.source = source
+            state.samples.removeAll()
+            state.windowResetAt = nil
+            state.sawUnexplainedDrop = false
         }
 
         // The server says when the window turns over, so there's no need to
@@ -552,41 +588,38 @@ struct RecentActivityTracker {
         // (The minute of slack is because a reset time reconstructed from the
         // local file is an estimate that drifts slightly between reads.)
         if let resetAt {
-            if let known = windowResetAt, resetAt > known.addingTimeInterval(60) {
-                samples.removeAll()
-                sawUnexplainedDrop = false
+            if let known = state.windowResetAt, resetAt > known.addingTimeInterval(60) {
+                state.samples.removeAll()
+                state.sawUnexplainedDrop = false
             }
-            windowResetAt = resetAt
+            state.windowResetAt = resetAt
         }
 
-        if let previous = samples.last?.percent, percent < previous {
+        if let previous = state.samples.last?.percent, percent < previous {
             // Usage falling with no reset announced is more likely a bad
             // reading than a real event — both the API and the desktop app
             // emit the occasional one (a lone 0 between two 12s, say).
             // Throwing away twenty minutes of history for something that
             // might be gone by the next poll costs far more than waiting one
             // poll to find out.
-            guard sawUnexplainedDrop else {
-                sawUnexplainedDrop = true
+            guard state.sawUnexplainedDrop else {
+                state.sawUnexplainedDrop = true
                 return
             }
             // It stuck, so it's real however it came about.
-            samples.removeAll()
+            state.samples.removeAll()
         }
-        sawUnexplainedDrop = false
+        state.sawUnexplainedDrop = false
 
-        samples.append((date, percent))
+        state.samples.append(State.Sample(date: date, percent: percent))
         let cutoff = date.addingTimeInterval(-maxWindow - 60)
-        samples.removeAll { $0.date < cutoff }
+        state.samples.removeAll { $0.date < cutoff }
     }
 
     // Forgets everything recorded so far — for when the samples describe an
     // account or organization the user is no longer looking at.
     mutating func reset() {
-        samples.removeAll()
-        recordedSource = nil
-        windowResetAt = nil
-        sawUnexplainedDrop = false
+        state = State()
     }
 
     // `.unknown` covers two cases: there isn't even `minWindow` of history
@@ -595,46 +628,58 @@ struct RecentActivityTracker {
     // — a percentage DROP means a new 5-hour window started, not negative
     // usage, and there's no honest number to show for it.
     func activity(now: Date) -> Result {
-        guard let currentPercent = samples.last?.percent, let oldest = samples.first else {
+        guard let latest = state.samples.last, let oldest = state.samples.first else {
             return .unknown
         }
 
-        // A minute is the least that can be described; below it there isn't a
-        // span worth naming. Waiting for the full floor instead would mean
-        // saying nothing for five minutes after every launch and every window
-        // reset, which is most of what there is to say at exactly the moment
-        // someone opens the menu to look.
+        // Below one poll apart there is no span to name yet. Anything above it
+        // we can already answer, so waiting longer would be withholding a
+        // figure we hold.
         let availableSpan = now.timeIntervalSince(oldest.date)
-        guard availableSpan >= 60 else { return .unknown }
+        guard availableSpan >= minSpan else { return .unknown }
 
         // Look no further back than the ceiling; if we have less history than
-        // that, however much we do have is the honest limit.
+        // that, however much we do have is the honest limit. This is also what
+        // discards a log restored from a launch hours ago before any of it can
+        // be quoted: every sample in it falls outside the horizon.
         let horizon = now.addingTimeInterval(-maxWindow)
-        let inRange = samples.filter { $0.date >= horizon }
+        let inRange = state.samples.filter { $0.date >= horizon }
         guard let earliest = inRange.first else { return .unknown }
 
-        let delta = currentPercent - earliest.percent
+        let delta = latest.percent - earliest.percent
         guard delta >= 0 else { return .unknown }
 
         // The floor is a claim about coverage, so it can only be made once
         // we've actually watched that long: two minutes in, the answer is
         // "last 2 min", not "last 5 min" with three minutes we never saw
         // folded into it.
-        let floorMinutes = max(1, Int(min(minWindow, availableSpan) / 60))
+        let floor = min(minWindow, availableSpan)
 
-        guard delta > 0 else { return .measured(deltaPercent: 0, elapsedMinutes: floorMinutes) }
+        guard delta > 0 else { return .measured(deltaPercent: 0, elapsed: floor) }
 
         // The window ends at the last reading still sitting at the pre-rise
         // level — the moment right before usage started climbing. That's what
         // makes "16 min" mean the activity really did span 16 minutes, rather
         // than being the ceiling with idle time padded onto the front.
         let baseline = inRange.last { $0.percent == earliest.percent } ?? earliest
-        let elapsed = Int((now.timeIntervalSince(baseline.date) / 60).rounded())
+        let elapsed = now.timeIntervalSince(baseline.date)
 
         // Everything older than the baseline sits at the same level, so
         // widening to the floor cannot change the figure — only its label.
-        return .measured(deltaPercent: delta, elapsedMinutes: max(floorMinutes, elapsed))
+        return .measured(deltaPercent: delta, elapsed: max(floor, elapsed))
     }
+}
+
+// How long a recent-activity figure covers, as the panel states it.
+//
+// Seconds below a minute, whole minutes above. The sub-minute case is the
+// whole reason this exists: rounding 40 seconds up to "1 min" would claim
+// coverage we haven't earned, and refusing to overstate it is what used to
+// keep the panel silent for a full minute after every launch.
+func recentSpanLabel(_ elapsed: TimeInterval) -> String {
+    let seconds = max(1, Int(elapsed.rounded()))
+    if seconds < 60 { return "\(seconds) sec" }
+    return "\(Int((elapsed / 60).rounded())) min"
 }
 
 // Converts the raw samples read from the local file into the same
