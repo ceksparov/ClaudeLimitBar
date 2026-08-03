@@ -57,6 +57,13 @@ internal sealed class TrayAppContext : ApplicationContext
             _settings.OverlayY = _overlay.Top;
             _settings.Save();
         };
+        _overlay.HideRequested += (_, _) =>
+        {
+            _overlayItem.Checked = false;
+            _settings.OverlayVisible = false;
+            _settings.Save();
+            _overlay.Hide();
+        };
         _overlayItem.Checked = _settings.OverlayVisible;
         if (_settings.OverlayVisible) _overlay.Show();
 
@@ -398,9 +405,42 @@ internal sealed class TrayAppContext : ApplicationContext
             return;
         }
 
-        _menuWindow = new MenuWindow();
-        _menuWindow.FormClosed += (_, _) => _menuWindow = null;
-        _menuWindow.Show();
+        var window = new MenuWindow();
+        _menuWindow = window;
+        window.FormClosed += (_, _) => _menuWindow = null;
+        window.SetLocalState(
+            _lastRows, _settings.RefreshSeconds, _settings.OverlayVisible, _startupItem.Checked);
+        window.Show();
+
+        _ = LoadMenuAccountAsync(window);
+    }
+
+    /// <summary>
+    /// The account lookup is its own request, so the window opens straight away and fills the
+    /// account rows in when the answer arrives.
+    /// </summary>
+    private async Task LoadMenuAccountAsync(MenuWindow window)
+    {
+        if (!_authenticated)
+        {
+            if (!window.IsDisposed) window.SetAccountUnavailable("Not signed in");
+            return;
+        }
+
+        try
+        {
+            AccountInfo account = await _client.FetchAccountAsync();
+            if (!window.IsDisposed) window.SetAccount(account);
+        }
+        catch (ClaudeSessionChangedException)
+        {
+            // The account was switched while this was in flight; the stale answer is dropped.
+        }
+        catch (Exception exception)
+        {
+            LogException(exception);
+            if (!window.IsDisposed) window.SetAccountUnavailable("Unavailable");
+        }
     }
 
     private async Task LogoutAsync()

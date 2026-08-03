@@ -90,6 +90,35 @@ internal sealed class ClaudeClient
         return Deserialize(json, UsageJsonContext.Default.UsageResponse);
     }
 
+    /// <summary>
+    /// The organization the app is reading usage for. Its <c>name</c> is the sign-in email on a
+    /// personal account, which is the only place the app can learn who is signed in - there is
+    /// no account endpoint it can reach (/api/auth/current_account returns 404).
+    /// </summary>
+    public async Task<AccountInfo> FetchAccountAsync()
+    {
+        int generation = _sessionGeneration;
+        string json = await GetJsonAsync("/api/organizations", generation);
+
+        List<Organization>? organizations = json.TrimStart().StartsWith('[')
+            ? Deserialize(json, UsageJsonContext.Default.ListOrganization)
+            : Deserialize(json, UsageJsonContext.Default.OrganizationListEnvelope).Organizations;
+
+        if (organizations is not { Count: > 0 })
+        {
+            throw new ClaudeException("No usable organization was found for this Claude account.");
+        }
+
+        EnsureCurrentSession(generation);
+
+        Organization organization =
+            organizations.FirstOrDefault(candidate => string.Equals(
+                candidate.ResolveId(), _organizationId, StringComparison.OrdinalIgnoreCase))
+            ?? organizations[0];
+
+        return AccountInfo.From(organization);
+    }
+
     private async Task<string?> DiscoverOrganizationIdAsync(
         int generation,
         string? activeOrganizationId = null)

@@ -90,6 +90,16 @@ internal sealed class Organization
     [JsonPropertyName("organization_id")]
     public string? OrganizationId { get; set; }
 
+    /// <summary>For a personal account this is the sign-in email address.</summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("rate_limit_tier")]
+    public string? RateLimitTier { get; set; }
+
+    [JsonPropertyName("created_at")]
+    public string? CreatedAt { get; set; }
+
     public string? ResolveId() => Uuid ?? OrganizationId ?? Id.ValueKind switch
     {
         JsonValueKind.String => Id.GetString(),
@@ -111,6 +121,29 @@ internal sealed class OrganizationListEnvelope
 [JsonSerializable(typeof(OrganizationListEnvelope))]
 [JsonSerializable(typeof(JsonElement))]
 internal sealed partial class UsageJsonContext : JsonSerializerContext;
+
+/// <summary>What the menu shows about the signed-in account, already formatted.</summary>
+internal sealed record AccountInfo(string Email, string Tier, string MemberSince)
+{
+    public static AccountInfo From(Organization organization)
+    {
+        string email = string.IsNullOrWhiteSpace(organization.Name) ? "Unknown" : organization.Name;
+
+        // The tier arrives as an internal identifier like "default_claude_ai". Rather than
+        // guessing at a plan name it might not mean, it is shown tidied up but unmapped.
+        string tier = string.IsNullOrWhiteSpace(organization.RateLimitTier)
+            ? "Unknown"
+            : organization.RateLimitTier.Replace('_', ' ');
+
+        string memberSince = DateTimeOffset.TryParse(
+            organization.CreatedAt, CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var created)
+            ? created.ToString("d MMM yyyy", CultureInfo.InvariantCulture)
+            : "Unknown";
+
+        return new AccountInfo(email, tier, memberSince);
+    }
+}
 
 // ------------------------------------------------------------ Presentation
 

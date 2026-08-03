@@ -36,11 +36,15 @@ internal sealed class UsageOverlay : Form
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+    private readonly ContextMenuStrip _menu = new();
     private double? _percent;
     private Color _color = Palette.Accent;
 
     /// <summary>Reports the new position once a drag ends; saving it is the caller's job.</summary>
     public event EventHandler? PositionChanged;
+
+    /// <summary>Raised when "Hide" is picked from the right-click menu.</summary>
+    public event EventHandler? HideRequested;
 
     public UsageOverlay()
     {
@@ -56,6 +60,11 @@ internal sealed class UsageOverlay : Form
         // one unit outside the grid. The bar frame asks for extra room at the bottom too.
         Width = (PetSprite.Columns + 2) * Unit;
         Height = (PetSprite.RowCount + 2) * Unit + GapAboveBar + BarHeight + BarFrame * 2;
+
+        var hideItem = new ToolStripMenuItem("Hide from screen");
+        hideItem.Click += (_, _) => HideRequested?.Invoke(this, EventArgs.Empty);
+        _menu.Items.Add(hideItem);
+        ContextMenuStrip = _menu;
 
         MouseDown += OnDragStart;
     }
@@ -148,5 +157,11 @@ internal sealed class UsageOverlay : Form
             graphics.FillRectangle(index < filled ? fill : channel,
                 left, y, right - left, BarHeight);
         }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _menu.Dispose();
+        base.Dispose(disposing);
     }
 }
