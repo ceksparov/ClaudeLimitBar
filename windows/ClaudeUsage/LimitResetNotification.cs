@@ -70,25 +70,7 @@ internal sealed class LimitResetNotification : Form
             "and resets when it suits you best.";
         graphics.DrawString(message, _bodyFont, text, new RectangleF(30, 111, Width - 60, 184));
 
-        DrawButton(graphics, border, accent);
-    }
-
-    private void DrawButton(Graphics graphics, Brush border, Brush accent)
-    {
-        Color faceColor = _buttonPressed
-            ? Palette.Border
-            : _buttonHovered ? Color.FromArgb(57, 52, 61) : Color.FromArgb(46, 42, 49);
-        using var face = new SolidBrush(faceColor);
-        using var outline = new SolidBrush(PetSprite.Outline);
-
-        graphics.FillRectangle(outline, _button.X - 4, _button.Y - 4, _button.Width + 8, _button.Height + 8);
-        graphics.FillRectangle(accent, _button.X + 3, _button.Bottom, _button.Width, 4);
-        graphics.FillRectangle(face, _button);
-        graphics.FillRectangle(border, _button.X, _button.Y, _button.Width, 4);
-        graphics.FillRectangle(border, _button.X, _button.Y, 4, _button.Height);
-
-        TextRenderer.DrawText(graphics, "OK", _buttonFont, _button, Palette.Text,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+        PixelButton.Draw(graphics, _button, "OK", _buttonFont, _buttonHovered, _buttonPressed);
     }
 
     private static void DrawDottedRule(Graphics graphics, int x, int y, int width, Brush brush)
@@ -103,7 +85,7 @@ internal sealed class LimitResetNotification : Form
         bool hovered = _button.Contains(e.Location);
         if (hovered == _buttonHovered) return;
         _buttonHovered = hovered;
-        Invalidate(new Rectangle(_button.X - 5, _button.Y - 5, _button.Width + 10, _button.Height + 14));
+        Invalidate(PixelButton.RepaintBounds(_button));
     }
 
     protected override void OnMouseDown(MouseEventArgs e)

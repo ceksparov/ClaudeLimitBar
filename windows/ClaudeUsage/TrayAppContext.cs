@@ -24,12 +24,14 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _loginItem = new("Sign in to Claude");
     private readonly ToolStripMenuItem _switchAccountItem = new("Switch account");
     private readonly ToolStripMenuItem _logoutItem = new("Sign out");
+    private readonly ToolStripMenuItem _menuWindowItem = new("Menu");
     private readonly ToolStripMenuItem _batteryItem = new("Show on tray icon") { CheckOnClick = true };
     private readonly ToolStripMenuItem _overlayItem = new("Show on screen") { CheckOnClick = true };
     private readonly ToolStripMenuItem _refreshIntervalItem = new("Refresh interval");
     private readonly ToolStripMenuItem _startupItem = new("Start with Windows") { CheckOnClick = true };
 
     private LoginWindow? _loginWindow;
+    private MenuWindow? _menuWindow;
     private bool _authenticated;
     private bool _switchingAccount;
 
@@ -69,6 +71,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _loginItem.Click += (_, _) => OpenLogin();
         _switchAccountItem.Click += async (_, _) => await SwitchAccountAsync();
         _logoutItem.Click += async (_, _) => await LogoutAsync();
+        _menuWindowItem.Click += (_, _) => OpenMenuWindow();
         _batteryItem.Click += (_, _) =>
         {
             _settings.BatteryMode = _batteryItem.Checked;
@@ -102,6 +105,7 @@ internal sealed class TrayAppContext : ApplicationContext
             _switchAccountItem,
             _logoutItem,
             new ToolStripSeparator(),
+            _menuWindowItem,
             _overlayItem,
             _batteryItem,
             _refreshIntervalItem,
@@ -381,6 +385,24 @@ internal sealed class TrayAppContext : ApplicationContext
         _loginWindow.Show();
     }
 
+    private void OpenMenuWindow()
+    {
+        if (_menuWindow is { IsDisposed: false })
+        {
+            if (_menuWindow.WindowState == FormWindowState.Minimized)
+                _menuWindow.WindowState = FormWindowState.Normal;
+
+            _menuWindow.Show();
+            _menuWindow.Activate();
+            _menuWindow.BringToFront();
+            return;
+        }
+
+        _menuWindow = new MenuWindow();
+        _menuWindow.FormClosed += (_, _) => _menuWindow = null;
+        _menuWindow.Show();
+    }
+
     private async Task LogoutAsync()
     {
         Task clearSession = _client.LogoutAsync();
@@ -454,6 +476,7 @@ internal sealed class TrayAppContext : ApplicationContext
             _panel.Dispose();
             _overlay.Dispose();
             _loginWindow?.Dispose();
+            _menuWindow?.Dispose();
             _webViewHost.Dispose();
         }
         base.Dispose(disposing);

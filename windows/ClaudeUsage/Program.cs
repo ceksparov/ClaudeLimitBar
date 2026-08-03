@@ -20,6 +20,13 @@ internal static class Program
             return;
         }
 
+        if (args.Contains("--preview-menu", StringComparer.OrdinalIgnoreCase))
+        {
+            using var preview = new MenuWindow();
+            Application.Run(preview);
+            return;
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool isFirstInstance);
         if (!isFirstInstance) return;
 
