@@ -14,27 +14,41 @@ Thanks for considering it — this started as a small personal tool, so there's 
 
 ## Project layout
 
+The two platforms are kept in separate top-level folders so neither side has to
+touch the other's files.
+
 ```
-native-macos/
-  Sources/ClaudeLimitBar/   the app itself
+macos/
+  Sources/ClaudeLimitBar/    the app itself
   Tests/ClaudeLimitBarTests/ unit tests for the pure logic (no UI tests)
   Resources/                 app icon
   build-app.sh               packages the built binary into a .app
-menubar/
-  claude-usage.10s.js         an older xbar/SwiftBar plugin with the same idea,
+  menubar/
+    claude-usage.10s.js      an older xbar/SwiftBar plugin with the same idea,
                                kept for anyone who prefers it over a native app
+windows/
+  ClaudeUsage/               a .NET 9 WinForms tray app, described in windows/README.md
 ```
 
-The native app has no third-party dependencies — just Foundation, AppKit,
-WebKit, Security, and ServiceManagement.
+The native macOS app has no third-party dependencies — just Foundation, AppKit,
+WebKit, Security, and ServiceManagement. The Windows app depends only on
+Microsoft.Web.WebView2.
 
 ## Building and running
 
 ```bash
-cd native-macos
+cd macos
 swift build              # compile
 swift run                 # run directly (no app icon, no "Start at Login" option — see below)
 ./build-app.sh            # produce a real ClaudeLimitBar.app you can double-click
+```
+
+On Windows:
+
+```bash
+cd windows/ClaudeUsage
+dotnet build
+dotnet run
 ```
 
 `SMAppService` (the "Start at Login" toggle) only works from inside a real
@@ -45,7 +59,7 @@ resulting `.app`, not `swift run`.
 ## Tests
 
 ```bash
-cd native-macos
+cd macos
 swift test
 ```
 

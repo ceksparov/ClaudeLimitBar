@@ -16,7 +16,7 @@ jobs:
     runs-on: macos-14
     defaults:
       run:
-        working-directory: native-macos
+        working-directory: macos
     steps:
       - uses: actions/checkout@v4
 
