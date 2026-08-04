@@ -88,13 +88,22 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The tag reaches the shell through the environment, never through
+      # ${{ }} pasted into the script. Expression interpolation happens before
+      # a shell ever sees the line, so a tag named `v1.0";id;"` would be
+      # substituted in as syntax and run — and this job holds a token with
+      # contents: write. Nothing stops a tag from carrying `;` or a quote: the
+      # branch ruleset does not cover tags, so anyone who can push one could
+      # reach this.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release create "${{ github.ref_name }}" \
+          gh release create "$TAG" \
             dist/*.zip \
-            --repo "${{ github.repository }}" \
-            --title "${{ github.ref_name }}" \
+            --repo "$REPO" \
+            --title "$TAG" \
             --generate-notes \
             --prerelease
