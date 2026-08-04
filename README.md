@@ -1,13 +1,17 @@
 # ClaudeLimitBar
 
-A macOS menu bar app that shows your Claude usage limits (current session and
-weekly) at a glance — no need to open claude.ai to check.
+Your Claude usage limits (current session and weekly) at a glance, without
+opening claude.ai to check — in the macOS menu bar, or the Windows
+notification area.
 
 Not affiliated with or endorsed by Anthropic.
 
-There is a Windows tray app with the same idea in [`windows/`](windows/) — it is a
-separate codebase with its own README. The rest of this file describes the macOS app,
-which lives in [`macos/`](macos/).
+Each platform is its own native app, written against its own toolkit and
+sharing no code with the other: [`macos/`](macos/) is Swift and AppKit,
+[`windows/`](windows/) is C# and WinForms. They read the same endpoint and are
+released together from the same tag, so a given version means the same thing on
+both. The Windows app has [its own README](windows/README.md) covering what is
+specific to it.
 
 ## What it shows
 
@@ -26,16 +30,23 @@ Where a figure can't be worked out honestly — not enough history yet, or usage
 that appeared while nothing was recording — the app says so rather than
 showing a number it can't stand behind.
 
-## Requirements
-
-- macOS 13 or later
+The Windows app adds a couple of things of its own — an optional always-on-top
+overlay and a reminder when the 5-hour window hasn't been started yet. See
+[windows/README.md](windows/README.md).
 
 ## Install
 
-1. Download the latest `.zip` from [Releases](../../releases), unzip it, and
-   drag `ClaudeLimitBar.app` to `/Applications`.
-2. **First launch**: macOS will likely warn that the developer can't be
-   verified (this app isn't notarized by Apple). Either:
+Every release carries a zip per platform. Take the one matching your machine
+from [Releases](../../releases): `…-macos.zip` or `…-windows.zip`.
+
+### macOS
+
+Requires macOS 13 or later.
+
+1. Unzip and drag `ClaudeLimitBar.app` to `/Applications`.
+2. **First launch**: macOS will warn that the developer can't be verified —
+   the app is signed, but not with a paid Apple Developer certificate, so it
+   isn't notarized. Either:
    - Control-click the app → **Open**, or
    - go to **System Settings → Privacy & Security** and click **Open Anyway**
      next to the blocked-app message.
@@ -43,44 +54,87 @@ showing a number it can't stand behind.
    You only need to do this once.
 3. Click the menu bar icon → **Sign In with Claude…**.
 
+### Windows
+
+Requires Windows 10 or later, and the
+[Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+— already present on current Windows 11; the app tells you if it's missing.
+
+1. Unzip and put `ClaudeUsage.exe` wherever you keep such things. Nothing is
+   installed and no .NET runtime is needed; it is a single self-contained
+   executable.
+2. **First launch**: SmartScreen will show "Windows protected your PC", for the
+   same reason as above — the executable isn't signed with a paid code-signing
+   certificate. Click **More info** → **Run anyway**.
+3. Right-click the tray icon → **Sign in**.
+
+Neither warning means anything is wrong with the download; both say the same
+thing, which is that nobody has paid a certificate authority to vouch for it.
+If you'd rather not take that on trust, build from source — the instructions
+are below and neither app has meaningful dependencies.
+
 ## Building from source
 
 ```bash
 cd macos
-./build-app.sh        # produces ClaudeLimitBar.app
+./build-app.sh         # produces ClaudeLimitBar.app
 ./build-app.sh --zip   # also produces a distributable .zip
 ```
 
-For the Windows app, see [windows/README.md](windows/README.md).
+```bash
+cd windows/ClaudeUsage
+dotnet build           # compile
+dotnet run             # run it — the icon appears in the notification area
+dotnet publish -c Release   # a self-contained single-file executable
+```
 
 ## How it gets your usage data
 
-- **Signed in**: the app talks to the same internal endpoint claude.ai's own
-  web usage page uses (`/api/organizations/{org}/usage`). **This is not an
-  official, documented Anthropic API** — it's what the browser calls
-  internally, and it can change or break without notice. To get past
-  claude.ai's bot-detection layer, requests are sent with a normal browser
-  User-Agent string. If this ever gets your account rate-limited or flagged,
-  that's why — use at your own judgment.
-- **Not signed in / API unreachable**: falls back to reading the local usage
-  history file the official Claude desktop app writes to
-  `~/Library/Application Support/Claude/plan-usage-history.json`, and
-  estimates reset times from it.
+Both apps read the same internal endpoint claude.ai's own web usage page uses
+(`/api/organizations/{org}/usage`). **This is not an official, documented
+Anthropic API** — it's what the browser calls internally, and it can change or
+break without notice.
+
+They reach it differently, because each platform's easiest honest route
+differs:
+
+- **macOS** sends the request itself, carrying the session key from the
+  Keychain. To get past claude.ai's bot-detection layer it uses a normal
+  browser User-Agent string. If this ever gets your account rate-limited or
+  flagged, that's why — use at your own judgment.
+- **Windows** issues the request with `fetch()` inside the signed-in WebView2
+  page itself and reads the result back over the message bridge, so the session
+  cookie never leaves the browser profile.
+
+When macOS can't reach the API, it falls back to the local usage history file
+the official Claude desktop app writes to
+`~/Library/Application Support/Claude/plan-usage-history.json` and estimates
+reset times from it. That file is only written while that app is running, so it
+can be hours old — the menu says where the figures came from and how old they
+are.
+
+Neither app touches Claude Desktop's own installation: nothing is injected into
+its process, its `app.asar` is not patched, and its cookie database is never
+read.
 
 ## What it stores
 
-- **Your session key** goes in the macOS Keychain, and nowhere else. It is
-  never logged or written to disk in plain text.
-- **A small usage record** is kept in the app's own preferences so the daily
-  chart survives restarts: one entry per day, holding a date and a
-  percentage. Nothing identifying, and no message content — the app never
-  sees your conversations.
+Everything is local to your machine. Neither app sends anything anywhere except
+its requests to claude.ai, and neither has analytics of any kind.
 
-Both are local to your Mac. The app sends nothing anywhere except its
-requests to claude.ai, and it has no analytics of any kind.
+**Your credentials never leave the operating system's own keystore.** On macOS
+the session key goes in the Keychain and nowhere else; on Windows the session
+stays inside the app's WebView2 profile under `%APPDATA%\ClaudeUsage\WebView2`
+and is never read into the app's own code. Neither is ever logged or written to
+disk in the clear.
 
-Signing out clears the session key; signing in as a different account also
-clears the stored usage record, so one account's history never shows up
+Alongside that, each keeps a small record so the display survives a restart: a
+date and a percentage per day, plus preferences like refresh interval and
+window position. Nothing identifying, and no message content — neither app ever
+sees your conversations.
+
+Signing out clears the session. On macOS, signing in as a different account
+also clears the stored usage record, so one account's history never shows up
 under another's.
 
 ## Contributing
