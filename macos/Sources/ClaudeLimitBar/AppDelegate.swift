@@ -6,19 +6,17 @@ import ServiceManagement
 // dropdown menu, colors, click behavior. No calculation logic lives here —
 // that's in UsageData.swift and UsageAPI.swift.
 
-// Picks a color based on percentage. NSColor is built from "red/green/blue"
-// as 0-1 decimals (the same as the #ff3b30 hex code, just divided by 255
-// instead of written in hex — 255/255=1.00, 59/255=0.231, etc.).
-func colorFor(_ pct: Int) -> NSColor {
-    if pct >= 80 { return NSColor(red: 1.00, green: 0.231, blue: 0.188, alpha: 1) } // #ff3b30 red
-    if pct >= 50 { return NSColor(red: 1.00, green: 0.624, blue: 0.039, alpha: 1) } // #ff9f0a orange
-    return NSColor(red: 0.188, green: 0.820, blue: 0.345, alpha: 1) // #30d158 green
-}
+// Picks a color based on percentage. The thresholds and the colours both come
+// from Palette, which is shared with the Windows app — the same figure must
+// never appear in two different colours across the two.
+func colorFor(_ pct: Int) -> NSColor { Palette.colorFor(percent: pct) }
 
-// .secondaryLabelColor is the system's own "muted gray" — it adapts to
-// light/dark mode automatically, so we don't need to hardcode a hex value.
-let grayText = NSColor.secondaryLabelColor
-let warningColor = NSColor(red: 1.00, green: 0.624, blue: 0.039, alpha: 1) // #ff9f0a
+// The rows below the drawn panel are ordinary menu items, but they sit
+// directly under it, so they take their colours from the same palette rather
+// than from the system's semantic ones. A muted grey that adapts to the system
+// appearance would drift away from the panel's fixed surface in light mode.
+let grayText = Palette.muted
+let warningColor = Palette.warn
 
 // Each menu row isn't plain text, it's "colored text at a specific size",
 // so we use NSAttributedString — a regular String with extra attributes
@@ -137,11 +135,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // .accessory = "don't show a Dock icon, just live in the menu bar".
         NSApp.setActivationPolicy(.accessory)
 
-        // SF Symbols is Apple's built-in icon set; "bolt.fill" is our
-        // lightning-bolt icon.
-        statusItem.button?.image = NSImage(
-            systemSymbolName: "bolt.fill", accessibilityDescription: "Claude Usage"
-        )
+        // The mascot rather than an SF Symbol, so the thing you glance at all
+        // day is the same creature on both platforms. Drawn at cell size 1:
+        // the menu bar gives roughly 16pt of height and the sprite is 11 rows,
+        // which leaves it sitting comfortably without crowding the text.
+        let pet = PetSprite.image(cell: 1, body: Palette.accent, eye: Palette.eye)
+        pet.accessibilityDescription = "Claude Usage"
+        statusItem.button?.image = pet
         statusItem.button?.imagePosition = .imageLeading  // icon on the left, percentage text on the right
 
         // A one-line status log at launch. If a user reports an issue,
