@@ -16,7 +16,19 @@ APP_NAME="ClaudeLimitBar"
 # Bundle identifier, the id macOS uses to uniquely recognize the app.
 # Replace with your own domain/GitHub username if you publish your own build.
 BUNDLE_ID="io.github.claudelimitbar"
-VERSION="0.2.2"
+
+# The version comes from the release tag, never from a line in this file.
+# Held here as a literal, it had to be remembered separately every time a tag
+# was pushed: the release would be titled v0.3.0 while the app inside it went
+# on reporting 0.2.2, and nothing would complain. The release workflow passes
+# VERSION in; a local build on a tagged commit picks the tag up by itself.
+#
+# Anywhere else there is no release to name, so it builds as 0.0.0 rather than
+# borrowing a number that belongs to a real one.
+if [[ -z "${VERSION:-}" ]]; then
+    VERSION="$(git describe --tags --exact-match 2>/dev/null | sed 's/^v//' || true)"
+fi
+VERSION="${VERSION:-0.0.0}"
 
 APP_DIR="$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
