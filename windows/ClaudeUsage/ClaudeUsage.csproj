@@ -16,8 +16,12 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
-    <PublishTrimmed>true</PublishTrimmed>
-    <TrimMode>partial</TrimMode>
+    <!--
+      No trimming. The SDK refuses it outright for Windows Forms (NETSDK1175):
+      the framework finds its controls by reflection, so a trimmer has no way
+      to tell what is reachable and would cut away things the app needs at
+      runtime. Compression below wins back part of what trimming would have.
+    -->
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <DebugType>none</DebugType>
