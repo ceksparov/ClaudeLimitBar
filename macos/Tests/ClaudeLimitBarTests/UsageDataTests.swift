@@ -136,9 +136,19 @@ final class RecentActivityTrackerTests: XCTestCase {
         return tracker
     }
 
-    // Nothing to describe in the first seconds, so the panel stays quiet.
-    func testSaysNothingUntilThereIsAMinuteToDescribe() {
+    // Half a minute is a real answer, stated in the seconds actually watched.
+    // Withholding it until a full minute had passed is what left a fresh
+    // launch sitting on "measuring recent usage" long after it knew the
+    // figure — see recentSpanLabel for why the label has to carry seconds.
+    func testASpanShorterThanAMinuteIsStillReported() {
         let tracker = self.tracker(percentTimeline: [(0.5, 10), (0, 12)])
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 2, elapsed: 20))
+    }
+
+    // Below one poll apart there genuinely is no span to describe yet.
+    func testNothingIsClaimedBeforeTwoReadingsExist() {
+        var tracker = RecentActivityTracker()
+        tracker.record(percent: 10, at: start, source: .api, resetAt: nil)
         XCTAssertEqual(tracker.activity(now: start), .unknown)
     }
 
@@ -147,14 +157,14 @@ final class RecentActivityTrackerTests: XCTestCase {
     // minutes nobody observed.
     func testReportsTheSpanActuallyWatchedBeforeTheFloorIsEarned() {
         let tracker = self.tracker(percentTimeline: [(3, 10), (0, 12)])
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 2, elapsedMinutes: 3))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 2, elapsed: 3 * 60))
     }
 
     // Same for silence: three minutes of watching nothing happen is a real
     // answer, just a three-minute one.
     func testSilenceIsReportedOverTheSpanWatched() {
         let tracker = self.tracker(percentTimeline: [(3, 10), (0, 10)])
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsedMinutes: 3))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsed: 3 * 60))
     }
 
     // A reset the server announced needs no corroboration: the window is
@@ -177,7 +187,7 @@ final class RecentActivityTrackerTests: XCTestCase {
                 source: .api, resetAt: secondWindow
             )
         }
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 3, elapsedMinutes: 3))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 3, elapsed: 3 * 60))
     }
 
     // Both the API and the desktop app emit the occasional bad reading — a
@@ -197,7 +207,7 @@ final class RecentActivityTrackerTests: XCTestCase {
         // Measured against the real history: +1, over the floor. Had the dip
         // been taken as a reset, the window would have restarted at 15 and
         // this would read "+2% last 1 min" — which is what it did before.
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 1, elapsedMinutes: 5))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 1, elapsed: 5 * 60))
     }
 
     // A drop that is still there on the next poll is real, whatever caused
@@ -216,19 +226,25 @@ final class RecentActivityTrackerTests: XCTestCase {
                 source: .api, resetAt: nil
             )
         }
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 4, elapsedMinutes: 4))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 4, elapsed: 4 * 60))
     }
 
     func testUsesTheFiveMinuteFloorWhenThatIsAllWeHave() {
         let tracker = self.tracker(percentTimeline: [(5, 10), (0, 14)])
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 4, elapsedMinutes: 5))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 4, elapsed: 5 * 60))
     }
 
     // The point of stretching: activity that happened 8 minutes ago is real
     // and worth surfacing, so the window widens to cover it.
+    //
+    // The span runs from the last reading still at the old level, one poll
+    // before the rise — 500 seconds, not 480. That extra poll is the width of
+    // the uncertainty about when the climb actually began, and counting it in
+    // is the conservative end of it. It still labels as "8 min".
     func testStretchesPastTheFloorToIncludeOlderActivity() {
         let tracker = self.tracker(percentTimeline: [(10, 10), (8, 15), (0, 15)])
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 5, elapsedMinutes: 8))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 5, elapsed: 500))
+        XCTAssertEqual(recentSpanLabel(500), "8 min")
     }
 
     // ...and it reaches back exactly as far as the activity, not as far as
@@ -236,7 +252,8 @@ final class RecentActivityTrackerTests: XCTestCase {
     // minutes, with the idle time before it left out.
     func testReportsHowLongAgoTheActivityActuallyStarted() {
         let tracker = self.tracker(percentTimeline: [(20, 10), (16, 15), (0, 15)])
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 5, elapsedMinutes: 16))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 5, elapsed: 980))
+        XCTAssertEqual(recentSpanLabel(980), "16 min")
     }
 
     // Usage climbing without pause for half an hour still gets reported over
@@ -249,28 +266,28 @@ final class RecentActivityTrackerTests: XCTestCase {
                 at: start.addingTimeInterval(-Double(minutesAgo) * 60), source: .api, resetAt: nil
             )
         }
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 20, elapsedMinutes: 20))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 20, elapsed: 20 * 60))
     }
 
     // The case that motivated the elastic logic: idle for the whole window,
     // so widening it would only make the same "+0%" look staler.
     func testFallsBackToTheFloorWhenTheWiderWindowFindsNoActivity() {
         let tracker = self.tracker(percentTimeline: [(20, 40), (12, 40), (0, 40)])
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsedMinutes: 5))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsed: 5 * 60))
     }
 
     // Activity older than the ceiling is out of view entirely, so what's left
     // is an idle window and it collapses back to the floor.
     func testActivityOlderThanTheCeilingIsNotReported() {
         let tracker = self.tracker(percentTimeline: [(30, 10), (25, 50), (0, 50)])
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsedMinutes: 5))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsed: 5 * 60))
     }
 
     // A single late drop is held back pending confirmation, so the figure
     // stays with the history it already has rather than going silent.
     func testASingleDropAtTheEndDoesNotBlankTheFigure() {
         let tracker = self.tracker(percentTimeline: [(8, 95), (6, 95), (0, 3)])
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsedMinutes: 5))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 0, elapsed: 5 * 60))
     }
 }
 
@@ -292,10 +309,70 @@ final class RecentActivitySourceTests: XCTestCase {
         var tracker = RecentActivityTracker()
         tracker.record(percent: 10, at: start.addingTimeInterval(-300), source: .api, resetAt: nil)
         tracker.record(percent: 40, at: start, source: .api, resetAt: nil)
-        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 30, elapsedMinutes: 5))
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 30, elapsed: 5 * 60))
 
         tracker.reset()
         XCTAssertEqual(tracker.activity(now: start), .unknown)
+    }
+
+    // What a relaunch is: the state the last run left behind is handed back
+    // in, and the figure is available immediately rather than after a silent
+    // stretch spent rebuilding a log we already had.
+    func testAReloadedLogAnswersWithoutWaitingToRefillIt() {
+        var first = RecentActivityTracker()
+        first.record(percent: 10, at: start.addingTimeInterval(-300), source: .api, resetAt: nil)
+        first.record(percent: 14, at: start, source: .api, resetAt: nil)
+
+        let reloaded = RecentActivityTracker(state: first.state)
+        XCTAssertEqual(reloaded.activity(now: start), .measured(deltaPercent: 4, elapsed: 5 * 60))
+    }
+
+    // Carrying the source across is what makes the above work: without it the
+    // first reading after a relaunch reads as a source change and throws away
+    // everything just restored.
+    func testAReloadedLogSurvivesTheNextReadingFromTheSameSource() {
+        var first = RecentActivityTracker()
+        first.record(percent: 10, at: start.addingTimeInterval(-300), source: .api, resetAt: nil)
+
+        var reloaded = RecentActivityTracker(state: first.state)
+        reloaded.record(percent: 14, at: start, source: .api, resetAt: nil)
+        XCTAssertEqual(reloaded.activity(now: start), .measured(deltaPercent: 4, elapsed: 5 * 60))
+    }
+
+    // A log left behind hours ago describes a window that has long since
+    // passed, so none of it is quotable — every sample sits outside the
+    // ceiling.
+    func testALogRestoredFromLongAgoIsNotQuoted() {
+        var first = RecentActivityTracker()
+        first.record(percent: 10, at: start.addingTimeInterval(-300), source: .api, resetAt: nil)
+        first.record(percent: 40, at: start, source: .api, resetAt: nil)
+
+        let reloaded = RecentActivityTracker(state: first.state)
+        XCTAssertEqual(reloaded.activity(now: start.addingTimeInterval(3 * 3600)), .unknown)
+    }
+}
+
+final class RecentSpanLabelTests: XCTestCase {
+    // Seconds below a minute — the case the whole change exists for.
+    func testShortSpansAreStatedInSeconds() {
+        XCTAssertEqual(recentSpanLabel(20), "20 sec")
+        XCTAssertEqual(recentSpanLabel(45), "45 sec")
+    }
+
+    // Never "0 sec": a span too small to name still happened.
+    func testASpanBelowASecondStillReadsAsOne() {
+        XCTAssertEqual(recentSpanLabel(0.2), "1 sec")
+    }
+
+    // Just under a minute rounds up into minutes rather than reading "60 sec".
+    func testTheBoundaryReadsAsMinutesNotSixtySeconds() {
+        XCTAssertEqual(recentSpanLabel(59.6), "1 min")
+        XCTAssertEqual(recentSpanLabel(60), "1 min")
+    }
+
+    func testLongerSpansAreStatedInWholeMinutes() {
+        XCTAssertEqual(recentSpanLabel(5 * 60), "5 min")
+        XCTAssertEqual(recentSpanLabel(980), "16 min")
     }
 }
 
@@ -654,7 +731,7 @@ final class RecentActivityScenarioTests: XCTestCase {
         }
 
         let now = start.addingTimeInterval(780)
-        XCTAssertEqual(tracker.activity(now: now), .measured(deltaPercent: 18, elapsedMinutes: 13))
+        XCTAssertEqual(tracker.activity(now: now), .measured(deltaPercent: 18, elapsed: 13 * 60))
     }
 }
 
@@ -678,6 +755,13 @@ final class DailyFigureTests: XCTestCase {
 
     func testAPartialFigureOfOursBeatsNothing() {
         XCTAssertEqual(dailyFigure(ledger: entry(2, fromDayStart: false), fromFile: nil), 2)
+    }
+
+    // The file stops the moment the desktop app does, so it can sit hours
+    // behind while we keep reading the live figure. Once ours has overtaken
+    // it, the file is the staler of two partial records, not the fuller one.
+    func testOursWinsOnceItHasOvertakenAStaleFile() {
+        XCTAssertEqual(dailyFigure(ledger: entry(9, fromDayStart: false), fromFile: 4), 9)
     }
 
     func testNoRecordAtAllHasNoFigure() {
