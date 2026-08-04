@@ -58,7 +58,8 @@ final class UsagePanelView: NSView {
         // matters more than matching the pixel size, since the fonts either
         // side of it are not the same.
         static let percentCell: CGFloat = 4     // pixel-digit cell size
-        static let valueRow: CGFloat = 30       // pixel digits plus room beneath
+        static let valueRow: CGFloat = 26       // pixel digits plus room beneath
+        static let detailRow: CGFloat = 18      // reset time and recent activity, on its own line
         static let barHeight: CGFloat = 10
         static let barSegments = 20             // one block per 5%
         static let barGap: CGFloat = 2
@@ -119,7 +120,7 @@ final class UsagePanelView: NSView {
         var height = Metrics.padTop + Metrics.padBottom
         height += Metrics.headerHeight + Metrics.headerGap
 
-        let block = Metrics.labelRow + Metrics.valueRow + Metrics.barHeight
+        let block = Metrics.labelRow + Metrics.valueRow + Metrics.detailRow + Metrics.barHeight
         height += CGFloat(model.windows.count) * block
         height += CGFloat(max(0, model.windows.count - 1)) * Metrics.windowGap
 
@@ -219,18 +220,20 @@ final class UsagePanelView: NSView {
             "\(window.percent)%", at: NSPoint(x: content.minX, y: y),
             cell: Metrics.percentCell, color: color
         )
-
-        // The detail sits on the baseline of the pixel digits, right-aligned,
-        // exactly as the reset text does on Windows.
-        let digitsHeight = PixelFont.height(cell: Metrics.percentCell)
-        draw(
-            window.detail, font: Self.detailFont, color: Palette.secondary, alignment: .right,
-            in: NSRect(
-                x: content.minX, y: y + digitsHeight - 16,
-                width: content.width, height: 16
-            )
-        )
         y += Metrics.valueRow
+
+        // The detail gets a row of its own rather than sharing the figure's,
+        // as it does on Windows. There it is a short "Resets 3:45 PM" beside a
+        // number, on a panel with room to spare. Ours carries the reset time
+        // AND what the last few minutes cost — "Resets in 1d 10h (Thu 3:00 AM)
+        // · +17% today" — which right-aligned across the full width runs
+        // straight over the digits. Truncating it would drop the half that
+        // moves, so it gets the width instead.
+        draw(
+            window.detail, font: Self.detailFont, color: Palette.secondary,
+            in: NSRect(x: content.minX, y: y, width: content.width, height: Metrics.detailRow)
+        )
+        y += Metrics.detailRow
 
         drawBar(
             percent: window.percent, color: color,
