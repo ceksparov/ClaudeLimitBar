@@ -18,3 +18,10 @@ jobs:
         with:
           dotnet-version: "9.0.x"
       - run: dotnet build --configuration Debug
+
+      # Release is a different build from Debug, not just a faster one — it is
+      # where self-contained, single-file and the runtime identifier come in
+      # (see ClaudeUsage.csproj). Only Debug being checked here is how a
+      # Release-only setting that the SDK rejects outright sat in the project
+      # unnoticed until a tag was pushed and the release failed instead.
+      - run: dotnet publish -c Release
