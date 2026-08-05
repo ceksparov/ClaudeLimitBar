@@ -190,6 +190,49 @@ final class RecentActivityTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 3, elapsed: 3 * 60))
     }
 
+    // A window can turn over and be used for a while before a reading shows
+    // it: the reset is only noticed on the first poll that carries the new
+    // reset time. Clearing on its own leaves that first reading as the
+    // baseline, so a window already at 5% reports nothing until it passes 5
+    // again and the minutes before are lost — which is what made a session
+    // spent ten minutes earlier disappear from the figure entirely.
+    //
+    // Where the window began is not a guess: the server's reset time places
+    // it exactly, and a window begins at zero.
+    func testUsageBeforeAResetWasNoticedIsStillCounted() {
+        var tracker = RecentActivityTracker()
+        let firstWindow = start.addingTimeInterval(-3600)
+        tracker.record(percent: 90, at: start.addingTimeInterval(-900), source: .api, resetAt: firstWindow)
+
+        // The new window opened 12 minutes ago and is already at 5% by the
+        // time the first reading carrying its reset time arrives.
+        let windowStart = start.addingTimeInterval(-12 * 60)
+        let secondWindow = windowStart.addingTimeInterval(5 * 3600)
+        tracker.record(percent: 5, at: start.addingTimeInterval(-60), source: .api, resetAt: secondWindow)
+        tracker.record(percent: 8, at: start, source: .api, resetAt: secondWindow)
+
+        // All 8 points, measured from when the window actually opened — not
+        // the 3 that are visible from the first reading onwards.
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 8, elapsed: 12 * 60))
+    }
+
+    // The same seeding must not reach back further than a figure is allowed
+    // to cover. A window that opened hours ago says nothing about the last
+    // twenty minutes, and quoting it would stretch the label across a span
+    // nobody watched.
+    func testAResetNoticedLongAfterTheWindowOpenedIsNotBackdated() {
+        var tracker = RecentActivityTracker()
+        let firstWindow = start.addingTimeInterval(-4 * 3600)
+        tracker.record(percent: 90, at: start.addingTimeInterval(-3600), source: .api, resetAt: firstWindow)
+
+        // Opened three hours ago, only noticed now.
+        let secondWindow = start.addingTimeInterval(-3 * 3600).addingTimeInterval(5 * 3600)
+        tracker.record(percent: 40, at: start.addingTimeInterval(-60), source: .api, resetAt: secondWindow)
+        tracker.record(percent: 42, at: start, source: .api, resetAt: secondWindow)
+
+        XCTAssertEqual(tracker.activity(now: start), .measured(deltaPercent: 2, elapsed: 60))
+    }
+
     // Both the API and the desktop app emit the occasional bad reading — a
     // lone 0 between two 12s. Wiping twenty minutes of history for one of
     // them was losing real windows, so a drop has to survive a poll first.

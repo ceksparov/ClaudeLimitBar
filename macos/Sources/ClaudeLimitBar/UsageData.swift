@@ -579,15 +579,23 @@ struct RecentActivityTracker {
     let minWindow: TimeInterval
     let maxWindow: TimeInterval
 
+    // How long the limit window being tracked runs for — five hours for the
+    // session window. Needed to work out when a freshly reset window began,
+    // which is the one moment its usage is known without having watched it:
+    // zero, by definition. See `record`.
+    let limitWindow: TimeInterval
+
     private(set) var state: State
 
     init(
         minWindow: TimeInterval = 5 * 60, maxWindow: TimeInterval = 20 * 60,
-        minSpan: TimeInterval = 20, state: State = State()
+        minSpan: TimeInterval = 20, limitWindow: TimeInterval = 5 * 60 * 60,
+        state: State = State()
     ) {
         self.minWindow = minWindow
         self.maxWindow = maxWindow
         self.minSpan = minSpan
+        self.limitWindow = limitWindow
         self.state = state
     }
 
@@ -619,6 +627,26 @@ struct RecentActivityTracker {
             if let known = state.windowResetAt, resetAt > known.addingTimeInterval(60) {
                 state.samples.removeAll()
                 state.sawUnexplainedDrop = false
+
+                // Clearing alone loses whatever the new window had already
+                // accumulated before we noticed it had turned over — the
+                // reading that lands next becomes the baseline, so a window
+                // spotted at 5% reports nothing until it climbs past 5 again,
+                // and the first minutes of it simply vanish.
+                //
+                // The one thing known about a window without having watched
+                // it is where it started: at zero, when it opened, which the
+                // server's reset time places exactly. Seeding that is a
+                // definition rather than a guess, and it is what lets usage
+                // spent before the reset was seen still be counted.
+                //
+                // Only worth seeding if that moment is recent enough to still
+                // be quotable; `activity` ignores anything past maxWindow, so
+                // an older one would be dropped on sight anyway.
+                let windowStart = resetAt.addingTimeInterval(-limitWindow)
+                if windowStart <= date, date.timeIntervalSince(windowStart) <= maxWindow {
+                    state.samples.append(State.Sample(date: windowStart, percent: 0))
+                }
             }
             state.windowResetAt = resetAt
         }
