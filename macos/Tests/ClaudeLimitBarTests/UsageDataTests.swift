@@ -596,13 +596,34 @@ final class UsageLedgerTests: XCTestCase {
         XCTAssertEqual(ledger.days[key(at(-3, dayOffset: 2))]?.consumed, 0)
     }
 
+    // A drop that repeats is trusted: the server really did reset the window.
     func testAWeeklyResetStartsTheDayOverAtTheNewFigure() {
         var ledger = recording(UsageLedger(), weeklyPercent: 90, at: noon, source: .api, calendar: calendar)
         ledger = recording(ledger, weeklyPercent: 95, at: at(1), source: .api, calendar: calendar)
         ledger = recording(ledger, weeklyPercent: 3, at: at(2), source: .api, calendar: calendar)  // window reset
+        ledger = recording(ledger, weeklyPercent: 3, at: at(3), source: .api, calendar: calendar)  // confirmed
 
         XCTAssertEqual(ledger.days[key(noon)]?.consumed, 3)
         XCTAssertEqual(ledger.unrecorded, 0)
+    }
+
+    // A single low reading is more likely a bad API response than a real
+    // reset — the live endpoint can return a momentary 0 during a network
+    // blip. Trusting it immediately used to overwrite the day's whole
+    // recorded total with that one bad number outright; this is the bug that
+    // produced a day showing the entire week's usage. The drop is held for
+    // one more reading instead, and a normal reading right after it is
+    // treated as nothing having happened.
+    func testALoneDropInTheWeeklyFigureIsNotTakenAsAReset() {
+        var ledger = recording(UsageLedger(), weeklyPercent: 83, at: noon, source: .api, calendar: calendar)
+        ledger = recording(ledger, weeklyPercent: 0, at: at(1), source: .api, calendar: calendar)  // bad reading
+        ledger = recording(ledger, weeklyPercent: 84, at: at(2), source: .api, calendar: calendar)
+        ledger = recording(ledger, weeklyPercent: 89, at: at(3), source: .api, calendar: calendar)
+
+        // Not 89 (the old bug: the bad 0 reset the day, then every later
+        // reading rebuilt it right back up to the current total).
+        XCTAssertEqual(ledger.days[key(noon)]?.consumed, 6)
+        XCTAssertEqual(ledger.lastSeenPercent, 89)
     }
 
     // Starting up mid-day creates an entry, but one that missed the morning.

@@ -295,6 +295,15 @@ struct UsageLedger: Codable, Equatable {
 
     var lastSeenPercent: Int?
     var lastSeenAt: Date?
+
+    // Set after a single reading comes in lower than the last one recorded,
+    // and cleared the moment a reading doesn't repeat that drop — see
+    // `recording()`. Optional rather than defaulting to false so that
+    // decoding a ledger stored before this field existed still succeeds
+    // (a missing key decodes as nil, exactly like `lastSeenPercent` above);
+    // a hard decode failure here would silently wipe the whole day-by-day
+    // history instead of just this one flag.
+    var sawUnexplainedDrop: Bool?
 }
 
 func ledgerDayKey(_ date: Date, calendar: Calendar = .current) -> String {
@@ -339,20 +348,39 @@ func recording(
 
     if let lastPercent = ledger.lastSeenPercent, let lastAt = ledger.lastSeenAt {
         if weeklyPercent < lastPercent {
-            // The weekly window reset. Whatever is on the clock now was spent
-            // after it, and anything this day held before belonged to the
-            // window that just ended.
+            // A single low reading is more likely a bad response than a real
+            // reset — the API can return a momentary 0 or an incomplete
+            // "seven_day" object during a network blip (see
+            // UsageAPI.parseUsageResponse's 0.0 fallback), and treating that
+            // as a reset overwrites the day's whole recorded total with it
+            // outright rather than merely misreading a delta. Mirrors
+            // RecentActivityTracker.record's sawUnexplainedDrop: the first
+            // drop is held rather than trusted, and every subsequent
+            // "normal" reading rebuilds day.consumed on top of it via rises
+            // below — so a false reset would otherwise re-inflate right back
+            // to the true total instead of resetting anything.
+            guard ledger.sawUnexplainedDrop == true else {
+                updated.sawUnexplainedDrop = true
+                return updated
+            }
+            // It stuck, so it's real: whatever is on the clock now was spent
+            // after the reset, and anything this day held before belonged to
+            // the window that just ended.
             day.consumed = weeklyPercent
             updated.unrecorded = 0
-        } else if weeklyPercent > lastPercent {
-            let rise = weeklyPercent - lastPercent
-            if calendar.isDate(lastAt, inSameDayAs: now) {
-                day.consumed += rise
-            } else {
-                // The gap straddles a day boundary, so we can't say which day
-                // this belongs to.
-                updated.unrecorded += rise
+            updated.sawUnexplainedDrop = false
+        } else {
+            if weeklyPercent > lastPercent {
+                let rise = weeklyPercent - lastPercent
+                if calendar.isDate(lastAt, inSameDayAs: now) {
+                    day.consumed += rise
+                } else {
+                    // The gap straddles a day boundary, so we can't say which
+                    // day this belongs to.
+                    updated.unrecorded += rise
+                }
             }
+            updated.sawUnexplainedDrop = false
         }
     }
 
