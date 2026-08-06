@@ -129,6 +129,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // where it stopped instead of owing the panel a silent stretch first.
     private var recentActivityTracker = RecentActivityTracker(state: SessionStore.recentActivity)
 
+    // Bumped on sign-out, sign-in, and organization switch. A fetch can be
+    // in flight for several seconds; without this, a request started under
+    // the old account can land AFTER the user has already signed out or
+    // switched, and its snapshot — real data, just for the wrong
+    // account — would get rendered and recorded on top of the state we just
+    // reset. Captured at the start of refreshFromAPI and checked once the
+    // request returns; a mismatch means the account changed underneath it,
+    // and the result is discarded rather than applied.
+    private var sessionGeneration = 0
+
     // AppKit calls this automatically once NSApplication has finished
     // launching (similar to a "DOMContentLoaded"-style "I'm ready now" moment).
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -244,12 +254,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // without this annotation there's a real risk of crashes/corruption.
     @MainActor
     private func refreshFromAPI() async {
+        // Captured before the request starts, not after — the account this
+        // fetch is FOR, frozen at the moment it was launched. If sign-out or
+        // an organization switch bumps the counter while the request is in
+        // flight, every branch below discards the result instead of
+        // applying another account's data to the state we already reset.
+        let generation = sessionGeneration
+
         isFetching = true
         lastFetchAt = Date()
         defer { isFetching = false }  // runs no matter how the function exits
 
         do {
             let snapshot = try await UsageAPI.fetchSnapshot()
+            guard generation == sessionGeneration else { return }
             apiError = nil
             pauseUntil = nil
             consecutiveAuthFailures = 0
@@ -257,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await loadOrganizationsIfNeeded()
 
         } catch APIError.rateLimited(let retryAfter) {
+            guard generation == sessionGeneration else { return }
             // Use the server's suggested wait time; default to 5 minutes if it didn't give one.
             let wait = retryAfter ?? 300
             pauseUntil = Date().addingTimeInterval(wait)
@@ -265,12 +284,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             renderFromFile()
 
         } catch APIError.unauthorized where consecutiveAuthFailures < 2 {
+            guard generation == sessionGeneration else { return }
             // Not sure yet — fall back to the local file without touching the key.
             consecutiveAuthFailures += 1
             apiError = APIError.unauthorized
             renderFromFile()
 
         } catch APIError.unauthorized {
+            guard generation == sessionGeneration else { return }
             // The key is dead now (session expired, or revoked elsewhere).
             // There's no benefit to keeping it in the Keychain: we'd keep
             // sending a request every 20 seconds that we know will fail,
@@ -291,6 +312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             renderFromFile()
 
         } catch {
+            guard generation == sessionGeneration else { return }
             // A transient problem (no internet, timeout, server error).
             // Rather than breaking the app, we quietly fall back to the
             // local file — the user still sees something, and the reason
@@ -740,6 +762,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func signIn() {
         loginWindow.present { [weak self] sessionKey in
+            self?.sessionGeneration += 1
             SessionStore.save(sessionKey: sessionKey)
             // This may be a different account — don't carry over the previous account's reset times.
             SessionStore.clearAccountCaches()
@@ -757,6 +780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func signOut() {
+        sessionGeneration += 1
         SessionStore.clear()
         SessionStore.orgId = nil
         SessionStore.preferredOrgId = nil
@@ -779,6 +803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func selectOrganization(_ sender: NSMenuItem) {
         guard let uuid = sender.representedObject as? String else { return }
+        sessionGeneration += 1
         SessionStore.orgId = uuid
         // Also save this as an explicit preference: orgId can get cleared
         // during error recovery, but the user's choice should persist.

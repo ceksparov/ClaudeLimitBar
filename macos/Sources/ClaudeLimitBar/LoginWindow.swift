@@ -43,6 +43,20 @@ private func safeURL(_ url: URL?) -> String {
     return "\(url.host ?? "?")\(url.path)"
 }
 
+// Exact match or a real subdomain, never a substring — plain "contains"
+// would also accept a cookie set by "notclaude.ai.example.com". Cookie
+// domains can carry a leading dot per RFC 6265 (a "domain cookie"), so
+// that's stripped before comparing.
+//
+// A value that passes this still needs to survive real API validation
+// before being trusted (see `validate` below) — this check exists as
+// defense in depth regardless, matching the same reasoning already applied
+// next to `reorderLoginFormScript` and `clearStoredWebSession`.
+func isClaudeDomain(_ rawDomain: String) -> Bool {
+    let domain = rawDomain.hasPrefix(".") ? String(rawDomain.dropFirst()) : rawDomain
+    return domain == "claude.ai" || domain.hasSuffix(".claude.ai")
+}
+
 // The "Sign In with Claude" window.
 //
 // Why it's built this way: on Windows, we used to try decrypting the
@@ -374,7 +388,7 @@ final class LoginWindowController: NSObject, WKNavigationDelegate, WKUIDelegate,
             guard let self else { return }
             guard
                 let cookie = cookies.first(where: {
-                    $0.name == "sessionKey" && $0.domain.contains("claude.ai")
+                    $0.name == "sessionKey" && isClaudeDomain($0.domain)
                 }),
                 !cookie.value.isEmpty
             else { return }
